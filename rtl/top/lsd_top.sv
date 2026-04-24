@@ -81,11 +81,25 @@ module lsd_top (
         .cmd_if(eccd_cmd.slave), .in_s(eccd_in.consumer), .out_s(eccd_out.producer)
     );
 
-    // Uniqueness bloater - a huge array of distinct generated modules wired
-    // through to keep the simulator's event queue saturated. See gen/.
+    // Uniqueness bloater - three independent families of distinct generated
+    // modules running side-by-side so the optimizer cannot collapse them by
+    // pattern-matching any single topology. See gen/.
+    //   u_bloat  : linear arithmetic chain   (gen_bloat.py  -> lsd_bloat_*)
+    //   u_bloat2 : parallel mem/ring bank    (gen_bloat2.py -> lsd_bloat2_*)
+    //   u_churn  : broadcast-fanout kernels  (gen_churn.py  -> lsd_churn_*)
     lsd_bloat_farm u_bloat (
         .clk    (clk),
         .rst_n  (rst_n),
         .seed   (host_cmd.cmd.data[31:0])
+    );
+    lsd_bloat2_farm u_bloat2 (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'hA5A5A5A5)
+    );
+    lsd_churn_farm u_churn (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'h5A5A5A5A)
     );
 endmodule : lsd_top

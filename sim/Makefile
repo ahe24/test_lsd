@@ -36,13 +36,31 @@ SEED        ?= 1
 VERB        ?= UVM_MEDIUM
 
 # -----------------------------------------------------------------------------
-# BLOAT_COUNT: number of auto-generated unique RTL modules (the "bloat farm")
-#              used to stress compile / elaboration / simulation.
+# BLOAT_COUNT: number of auto-generated unique RTL modules per bloat farm
+#              (three farms exist) used to stress compile / elaboration / sim.
 #
-#   Each bloat module is emitted by tools/gen_bloat.py with a structurally
-#   distinct body (unique LFSR poly, pipeline depth, mix constants) so the
-#   elaborator cannot merge them. They are all chained together inside
-#   rtl/gen/lsd_bloat_farm.sv, which is instantiated by lsd_top.
+#   Three independent families of bloat modules are generated, all sized by
+#   BLOAT_COUNT, so the effective module count instantiated in the design is
+#   3 x BLOAT_COUNT. Running three structurally different families at once
+#   keeps the simulator's optimizer from pattern-matching the workload away:
+#
+#     Family 1 (tools/gen_bloat.py   -> lsd_bloat_u####   + lsd_bloat_farm):
+#       Linear arithmetic chain. Each unit is a unique LFSR+pipeline body
+#       wrapped in a 32-bit shell; instances are wired sig[i] -> sig[i+1]
+#       through the whole farm in series.
+#
+#     Family 2 (tools/gen_bloat2.py  -> lsd_bloat2_u####  + lsd_bloat2_farm):
+#       Parallel memory / shift-ring kernels. Each unit runs independently
+#       from a per-instance rotated seed; taps XOR-reduce to a dead-end
+#       signal so -O5 cannot prune leaves.
+#
+#     Family 3 (tools/gen_churn.py   -> lsd_churn_u####   + lsd_churn_farm):
+#       Broadcast-fanout kernels. Farm drives 4 shared signals (counter +
+#       two LFSRs) to every unit; each unit mixes or rotate-combines them
+#       through per-instance unique state. Taps XOR-reduce as in family 2.
+#
+#   All three families use unique LFSR polys, mix constants, and internal
+#   sizes so the elaborator cannot merge units within a family either.
 #
 #   The `gen` target regenerates the farm whenever BLOAT_COUNT changes.
 #   `make compile` / `make sim` depend on `gen` and pick up new counts
@@ -171,9 +189,13 @@ WORKLIB     = work
 
 all: sim
 
-# Regenerate the bloat farm
+# Regenerate all three bloat farms (family 1: linear chain, family 2: parallel,
+# family 3: broadcast fanout). All honour BLOAT_COUNT — total generated module
+# count is 3 x BLOAT_COUNT.
 gen:
-	python tools/gen_bloat.py --out ../rtl/gen --count $(BLOAT_COUNT)
+	python tools/gen_bloat.py  --out ../rtl/gen --count $(BLOAT_COUNT)
+	python tools/gen_bloat2.py --out ../rtl/gen --count $(BLOAT_COUNT)
+	python tools/gen_churn.py  --out ../rtl/gen --count $(BLOAT_COUNT)
 
 workdir:
 	@if [ ! -d $(WORKLIB) ]; then vlib $(WORKLIB); vmap $(WORKLIB) $(WORKLIB); fi

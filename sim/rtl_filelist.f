@@ -109,8 +109,13 @@
 ../rtl/eccd/turbo/turbo_decoder_top.sv
 ../rtl/eccd/top/eccd_top.sv
 
-// -- Generated bloat farm (thousands of unique modules)
+// -- Generated bloat farms (thousands of unique modules, three families)
+//    family 1: linear arithmetic chain   (lsd_bloat_farm)
+//    family 2: parallel mem/ring kernels (lsd_bloat2_farm)
+//    family 3: broadcast-fanout kernels  (lsd_churn_farm)
 -f ../rtl/gen/gen_filelist.f
+-f ../rtl/gen/gen2_filelist.f
+-f ../rtl/gen/gen_churn_filelist.f
 
 // -- Top-level integration
 ../rtl/top/lsd_interconnect.sv
