@@ -37,30 +37,51 @@ VERB        ?= UVM_MEDIUM
 
 # -----------------------------------------------------------------------------
 # BLOAT_COUNT: number of auto-generated unique RTL modules per bloat farm
-#              (three farms exist) used to stress compile / elaboration / sim.
+#              (eight farms exist) used to stress compile / elaboration / sim.
 #
-#   Three independent families of bloat modules are generated, all sized by
+#   Eight independent families of bloat modules are generated, all sized by
 #   BLOAT_COUNT, so the effective module count instantiated in the design is
-#   3 x BLOAT_COUNT. Running three structurally different families at once
-#   keeps the simulator's optimizer from pattern-matching the workload away:
+#   8 x BLOAT_COUNT. Running eight structurally different families at once
+#   keeps the simulator's optimizer from collapsing the workload by matching
+#   any single topology or primitive:
 #
 #     Family 1 (tools/gen_bloat.py   -> lsd_bloat_u####   + lsd_bloat_farm):
-#       Linear arithmetic chain. Each unit is a unique LFSR+pipeline body
-#       wrapped in a 32-bit shell; instances are wired sig[i] -> sig[i+1]
-#       through the whole farm in series.
+#       Linear arithmetic chain. 32-bit LFSR+pipeline shell, sig[i]->sig[i+1].
 #
 #     Family 2 (tools/gen_bloat2.py  -> lsd_bloat2_u####  + lsd_bloat2_farm):
-#       Parallel memory / shift-ring kernels. Each unit runs independently
-#       from a per-instance rotated seed; taps XOR-reduce to a dead-end
-#       signal so -O5 cannot prune leaves.
+#       Parallel memory / shift-ring kernels, independent per-leaf with seed
+#       rotation and XOR-reduced taps.
 #
 #     Family 3 (tools/gen_churn.py   -> lsd_churn_u####   + lsd_churn_farm):
-#       Broadcast-fanout kernels. Farm drives 4 shared signals (counter +
-#       two LFSRs) to every unit; each unit mixes or rotate-combines them
-#       through per-instance unique state. Taps XOR-reduce as in family 2.
+#       Broadcast-fanout kernels. 4 shared signals (counter + two LFSRs)
+#       fanned out to every leaf; mix / constant-rotate primitives.
 #
-#   All three families use unique LFSR polys, mix constants, and internal
-#   sizes so the elaborator cannot merge units within a family either.
+#     Family 4 (tools/gen_grind.py   -> lsd_grind_u####   + lsd_grind_farm):
+#       Crosscouple ring. Each leaf couples to both neighbors' previous
+#       outputs; seed XORed into one ring edge prevents quiescence.
+#
+#     Family 5 (tools/gen_haze.py    -> lsd_haze_u####    + lsd_haze_farm):
+#       Pairwise fan-in. Each leaf takes TWO distinct seed-derived inputs
+#       through a 3-stage pipeline.
+#
+#     Family 6 (tools/gen_prism.py   -> lsd_prism_u####   + lsd_prism_farm):
+#       64-bit MAC chain. Linear chain like family 1 but wider data path
+#       with a real 32x32->64 multiplier per stage.
+#
+#     Family 7 (tools/gen_echo.py    -> lsd_echo_u####    + lsd_echo_farm):
+#       Deep forward shift-register delay lines (D=16..32 per leaf), no
+#       feedback -- long fan-out chains without cycles.
+#
+#     Family 8 (tools/gen_vortex.py  -> lsd_vortex_u####  + lsd_vortex_farm):
+#       1-bit tick broadcast + tick-gated saturating counter banks per
+#       leaf. Sparse broadcast signature distinct from family 3's dense one.
+#
+#   All families use unique LFSR polys, mix constants, and internal sizes
+#   so the elaborator cannot merge units within a family either.
+#
+#   HEADS UP: total module count is 8 x BLOAT_COUNT. The scale guide below
+#   is per-family; multiply compile/vopt time by roughly 8. Drop BLOAT_COUNT
+#   to 250-500 for quick iteration on the eight-family layout.
 #
 #   The `gen` target regenerates the farm whenever BLOAT_COUNT changes.
 #   `make compile` / `make sim` depend on `gen` and pick up new counts
@@ -88,7 +109,7 @@ VERB        ?= UVM_MEDIUM
 #   Override per-run:   make sim BLOAT_COUNT=10000
 #   Force regenerate:   make gen BLOAT_COUNT=5000
 # -----------------------------------------------------------------------------
-BLOAT_COUNT ?= 2000
+BLOAT_COUNT ?= 1000
 
 # --- Heartbeat period (simulated ns). tb_top prints a progress line every
 #     HEARTBEAT ns of sim time so a batch run visibly advances.
@@ -189,13 +210,18 @@ WORKLIB     = work
 
 all: sim
 
-# Regenerate all three bloat farms (family 1: linear chain, family 2: parallel,
-# family 3: broadcast fanout). All honour BLOAT_COUNT — total generated module
-# count is 3 x BLOAT_COUNT.
+# Regenerate all eight bloat farms. All honour BLOAT_COUNT — total generated
+# module count is 8 x BLOAT_COUNT. Each family lives in its own subdir under
+# ../rtl/gen/ so the directory stays navigable at large counts.
 gen:
-	python tools/gen_bloat.py  --out ../rtl/gen --count $(BLOAT_COUNT)
-	python tools/gen_bloat2.py --out ../rtl/gen --count $(BLOAT_COUNT)
-	python tools/gen_churn.py  --out ../rtl/gen --count $(BLOAT_COUNT)
+	python tools/gen_bloat.py  --out ../rtl/gen/bloat  --count $(BLOAT_COUNT)
+	python tools/gen_bloat2.py --out ../rtl/gen/bloat2 --count $(BLOAT_COUNT)
+	python tools/gen_churn.py  --out ../rtl/gen/churn  --count $(BLOAT_COUNT)
+	python tools/gen_grind.py  --out ../rtl/gen/grind  --count $(BLOAT_COUNT)
+	python tools/gen_haze.py   --out ../rtl/gen/haze   --count $(BLOAT_COUNT)
+	python tools/gen_prism.py  --out ../rtl/gen/prism  --count $(BLOAT_COUNT)
+	python tools/gen_echo.py   --out ../rtl/gen/echo   --count $(BLOAT_COUNT)
+	python tools/gen_vortex.py --out ../rtl/gen/vortex --count $(BLOAT_COUNT)
 
 workdir:
 	@if [ ! -d $(WORKLIB) ]; then vlib $(WORKLIB); vmap $(WORKLIB) $(WORKLIB); fi

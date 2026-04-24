@@ -220,13 +220,14 @@ def main():
     with open(farm_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(gen_farm(args.count))
 
-    # Same -f resolution rule as gen_bloat.py: paths are relative to sim/.
-    fl_path = os.path.join(args.out, "gen2_filelist.f")
-    rel_prefix = "../rtl/gen/"
+    # Filelist entries are resolved by vlog relative to its cwd (sim/).
+    # args.out is the family subdirectory path relative to sim/.
+    fl_path = os.path.join(args.out, "filelist.f")
+    out_rel = args.out.replace('\\', '/').rstrip('/')
     with open(fl_path, 'w', encoding='utf-8', newline='\n') as f:
         for p in filelist:
-            f.write(rel_prefix + p + "\n")
-        f.write(rel_prefix + "lsd_bloat2_farm.sv\n")
+            f.write(out_rel + "/" + p + "\n")
+        f.write(out_rel + "/lsd_bloat2_farm.sv\n")
 
     print(f"Wrote {args.count} bloat2 modules to {args.out} (+farm +filelist)")
 

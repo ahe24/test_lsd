@@ -81,12 +81,17 @@ module lsd_top (
         .cmd_if(eccd_cmd.slave), .in_s(eccd_in.consumer), .out_s(eccd_out.producer)
     );
 
-    // Uniqueness bloater - three independent families of distinct generated
+    // Uniqueness bloater - eight independent families of distinct generated
     // modules running side-by-side so the optimizer cannot collapse them by
-    // pattern-matching any single topology. See gen/.
+    // pattern-matching any single topology or primitive. See gen/.
     //   u_bloat  : linear arithmetic chain   (gen_bloat.py  -> lsd_bloat_*)
     //   u_bloat2 : parallel mem/ring bank    (gen_bloat2.py -> lsd_bloat2_*)
     //   u_churn  : broadcast-fanout kernels  (gen_churn.py  -> lsd_churn_*)
+    //   u_grind  : crosscouple ring          (gen_grind.py  -> lsd_grind_*)
+    //   u_haze   : pairwise fan-in           (gen_haze.py   -> lsd_haze_*)
+    //   u_prism  : 64-bit MAC chain          (gen_prism.py  -> lsd_prism_*)
+    //   u_echo   : deep delay lines          (gen_echo.py   -> lsd_echo_*)
+    //   u_vortex : tick + counter banks      (gen_vortex.py -> lsd_vortex_*)
     lsd_bloat_farm u_bloat (
         .clk    (clk),
         .rst_n  (rst_n),
@@ -101,5 +106,30 @@ module lsd_top (
         .clk    (clk),
         .rst_n  (rst_n),
         .seed   (host_cmd.cmd.data[31:0] ^ 32'h5A5A5A5A)
+    );
+    lsd_grind_farm u_grind (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'h11223344)
+    );
+    lsd_haze_farm u_haze (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'hCCCC3333)
+    );
+    lsd_prism_farm u_prism (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'h66778899)
+    );
+    lsd_echo_farm u_echo (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'hAABBCCDD)
+    );
+    lsd_vortex_farm u_vortex (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .seed   (host_cmd.cmd.data[31:0] ^ 32'hEEFF0011)
     );
 endmodule : lsd_top
