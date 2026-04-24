@@ -194,9 +194,30 @@ QSIM_FLAGS  = -batch -l qsim.log -do "run $(RUN); quit" -L $(UVM_LIB) \
               +heartbeat=$(HEARTBEAT) \
               $(QSIM_DBG_FLAGS)
 
-# qrun: modern 1-step flow, Visualizer-native
-QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps -uvm -uvmcontrol=all \
-              -O5 -optimize -debug +designfile -qwavedb=+signal+class \
+# qrun: modern 1-step flow (vlog + vopt + vsim in one invocation),
+# Visualizer-native. Uses the precompiled UVM library via -L $(UVM_LIB)
+# exactly like the vsim flow does.
+#
+# IMPORTANT — phase flags are NOT optimization knobs. qrun has four phases
+# (library -> compile -> optimize -> simulate) and by default runs all
+# of them. Passing `-compile`, `-optimize`, or `-simulate` *restricts*
+# qrun to that phase (plus any preceding ones). So `-optimize` stops
+# after vopt and never enters vsim — no UVM banner, no heartbeat, no
+# $finish. We want all four phases: DO NOT add any phase flag here.
+# `-O5` is the optimization *level* (fine to keep).
+#
+# Do NOT pass `-uvm`: that tells qrun to pull in UVM sources (incl.
+# uvm_dpi.cc) and compile them with a host C/C++ compiler. On a box
+# without a C++ toolchain in PATH that fails with:
+#   ** Fatal: (vlog-7019) Can't locate a C/C++ compiler for
+#                         'DPI C/C++ File Compilation'.
+# `-L mtiUvm` links against the DPI-built-in precompiled UVM shipped
+# with Questa, so no C++ compiler is required.
+QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps \
+              -suppress 2583 -suppress 13314 -suppress 13288 \
+              +define+UVM_NO_DEPRECATED \
+              -L $(UVM_LIB) -uvmcontrol=all \
+              -O5 -debug +designfile -qwavedb=+signal+class \
               -batch -l qrun.log -do "run $(RUN); quit" \
               -sv_seed $(SEED) +UVM_TESTNAME=$(TEST) +UVM_VERBOSITY=$(VERB) \
               +heartbeat=$(HEARTBEAT) \
@@ -205,23 +226,42 @@ QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps -uvm -uvmcontrol=all \
 WORKLIB     = work
 
 # =============================================================================
-.PHONY: all sim smokesim bmtsim stress gen clean workdir compile optimize run \
-        run_vsim run_qsim run_qrun info
+.PHONY: all sim smokesim bmtsim stress gen clean-gen clean workdir compile \
+        optimize run run_vsim run_qsim run_qrun info
 
 all: sim
 
-# Regenerate all eight bloat farms. All honour BLOAT_COUNT — total generated
-# module count is 8 x BLOAT_COUNT. Each family lives in its own subdir under
-# ../rtl/gen/ so the directory stays navigable at large counts.
-gen:
-	python tools/gen_bloat.py  --out ../rtl/gen/bloat  --count $(BLOAT_COUNT)
-	python tools/gen_bloat2.py --out ../rtl/gen/bloat2 --count $(BLOAT_COUNT)
-	python tools/gen_churn.py  --out ../rtl/gen/churn  --count $(BLOAT_COUNT)
-	python tools/gen_grind.py  --out ../rtl/gen/grind  --count $(BLOAT_COUNT)
-	python tools/gen_haze.py   --out ../rtl/gen/haze   --count $(BLOAT_COUNT)
-	python tools/gen_prism.py  --out ../rtl/gen/prism  --count $(BLOAT_COUNT)
-	python tools/gen_echo.py   --out ../rtl/gen/echo   --count $(BLOAT_COUNT)
-	python tools/gen_vortex.py --out ../rtl/gen/vortex --count $(BLOAT_COUNT)
+# Regenerate the eight bloat farms only when needed.
+#
+#   Each family has a stamp file at ../rtl/gen/<family>/.stamp-<BLOAT_COUNT>.
+#   The stamp encodes BLOAT_COUNT in its NAME, so a different count targets
+#   a file that doesn't exist yet and make re-invokes the generator. Touching
+#   a generator script (tools/gen_<family>.py) also invalidates that one
+#   family's stamp. A family whose script AND count are unchanged is skipped.
+#
+#   Total generated module count is 8 x BLOAT_COUNT. Each family lives in
+#   its own subdir under ../rtl/gen/ so the directory stays navigable at
+#   large counts.
+#
+#   Force a full regen:         make clean-gen gen
+#   Force one family only:      rm ../rtl/gen/<family>/.stamp-* && make gen
+BLOAT_FAMILIES := bloat bloat2 churn grind haze prism echo vortex
+BLOAT_STAMPS   := $(foreach f,$(BLOAT_FAMILIES),../rtl/gen/$(f)/.stamp-$(BLOAT_COUNT))
+
+gen: $(BLOAT_STAMPS)
+
+# Pattern rule: one recipe covers all eight families. Make resolves `%` to
+# the family name (bloat, bloat2, churn, ...) from the target path.
+../rtl/gen/%/.stamp-$(BLOAT_COUNT): tools/gen_%.py
+	@echo "[gen] $* (count=$(BLOAT_COUNT))"
+	python $< --out $(@D) --count $(BLOAT_COUNT)
+	-@rm -f $(@D)/.stamp-* 2>/dev/null
+	@touch $@
+
+# Wipe all stamps. `make gen` afterwards will regenerate every family.
+clean-gen:
+	-@rm -f ../rtl/gen/*/.stamp-* 2>/dev/null
+	@echo "[clean-gen] all family stamps removed"
 
 workdir:
 	@if [ ! -d $(WORKLIB) ]; then vlib $(WORKLIB); vmap $(WORKLIB) $(WORKLIB); fi
@@ -244,9 +284,14 @@ else ifeq ($(ENGINE),qsim)
 endif
 
 # -----------------------------------------------------------------------------
-# Run — dispatches to the selected engine
+# Run — dispatches to the selected engine.
+#
+# IMPORTANT: the `optimize` / `compile` dependencies live on the per-engine
+# run_vsim / run_qsim targets, NOT on `run` itself. qrun is a 1-step flow
+# (it performs vlog + vopt + vsim internally), so pre-running vlog/vopt
+# before qrun is pure waste AND would invalidate qrun's internal library.
 # -----------------------------------------------------------------------------
-run: optimize
+run:
 ifeq ($(ENGINE),vsim)
 	$(MAKE) run_vsim
 else ifeq ($(ENGINE),qsim)
@@ -257,14 +302,16 @@ else
 	$(error Unknown ENGINE=$(ENGINE) - valid: vsim | qsim | qrun)
 endif
 
-run_vsim:
+# Classic 3-step flow: vlog -> vopt -> vsim (optimize target pulls in compile).
+run_vsim: optimize
 	vsim $(VSIM_FLAGS) -uvmcontrol=all tb_top_opt
 
-run_qsim:
+run_qsim: optimize
 	qsim $(QSIM_FLAGS) -uvmcontrol=all tb_top_opt
 
-run_qrun:
-	$(MAKE) gen
+# 1-step flow: qrun does compile + optimize + sim in a single invocation.
+# Only gen needs to be ready first; qrun owns its own library (qrun.out/work).
+run_qrun: gen
 	qrun $(QRUN_FLAGS)
 
 # -----------------------------------------------------------------------------
