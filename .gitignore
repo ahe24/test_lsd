@@ -9,6 +9,7 @@
 sim/work/
 sim/transcript
 sim/transcript.*
+sim/transaction.config
 sim/vsim.wlf
 sim/vsim.wlf.*
 sim/tb.vcd
@@ -23,6 +24,7 @@ sim/tb_top_opt/
 sim/covhtmlreport/
 sim/qrun.out
 sim/qrun.out/
+sim/fprofile/
 sim/*.xml
 
 # Same patterns but caught anywhere (defensive — some tools emit to cwd)
@@ -33,6 +35,7 @@ transcript
 *.db
 *.db/
 *.log
+*.ses
 modelsim.ini
 design.bin
 design.bin.*
@@ -41,6 +44,7 @@ tb_top_opt/
 covhtmlreport/
 qrun.out
 qrun.out/
+qone_tut*
 
 # -----------------------------------------------------------------------------
 # Visualizer runtime cache / config / profile
