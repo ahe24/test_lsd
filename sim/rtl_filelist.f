@@ -8,6 +8,8 @@
 ../rtl/common/lsd_skid_buffer.sv
 ../rtl/common/lsd_fifo_sync.sv
 ../rtl/common/lsd_rr_arbiter.sv
+../rtl/common/lsd_prbs_driver.sv
+../rtl/common/lsd_self_traffic.sv
 
 // -- CNN
 ../rtl/cnn/mac/cnn_mac_int8_radix2.sv

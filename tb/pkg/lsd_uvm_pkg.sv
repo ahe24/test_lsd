@@ -301,26 +301,22 @@ package lsd_uvm_pkg;
     endclass
 
     // ---------------- Base test ----------------
+    //
+    // Phase 1 (partition-friendly RTL): the DUT generates its own traffic
+    // internally, so the testbench owns no virtual interfaces and no env
+    // is built.  The base test exists only as a UVM container so the
+    // existing run flow (raise/drop_objection, reporting, factory) keeps
+    // working — useful real per-subsystem agents will land in Phase 2.
+    //
+    // The lsd_env / agents / scoreboard classes above remain compiled (they
+    // are cheap and inflate the build footprint the project deliberately
+    // wants) but are not instantiated.
     class lsd_base_test extends uvm_test;
-        lsd_env     env;
-        lsd_env_cfg cfg;
-
         `uvm_component_utils(lsd_base_test)
         function new(string name, uvm_component parent);
             super.new(name, parent);
         endfunction
-
-        function void build_phase(uvm_phase phase);
-            cfg = lsd_env_cfg::type_id::create("cfg");
-            if (!uvm_config_db#(virtual lsd_cmd_if)::get(this,    "", "vif_cmd", cfg.vif_cmd))
-                `uvm_fatal("CFG", "vif_cmd missing")
-            if (!uvm_config_db#(virtual lsd_stream_if)::get(this, "", "vif_in",  cfg.vif_in))
-                `uvm_fatal("CFG", "vif_in missing")
-            if (!uvm_config_db#(virtual lsd_stream_if)::get(this, "", "vif_out", cfg.vif_out))
-                `uvm_fatal("CFG", "vif_out missing")
-            uvm_config_db#(lsd_env_cfg)::set(this, "env", "cfg", cfg);
-            env = lsd_env::type_id::create("env", this);
-        endfunction
+        // No build_phase override: nothing to wire when the DUT is self-driven.
     endclass
 
 endpackage : lsd_uvm_pkg

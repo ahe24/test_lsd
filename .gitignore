@@ -37,6 +37,7 @@ transcript
 *.log
 *.ses
 modelsim.ini
+questa.ini
 design.bin
 design.bin.*
 tb_top_opt
