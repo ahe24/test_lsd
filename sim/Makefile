@@ -274,8 +274,8 @@ endif
 TEST_PLUSARGS ?=
 
 # --- Aggregated per-tool flags
-VOPT_FLAGS  = -O5 $(VOPT_DBG_FLAGS)
-QOPT_FLAGS  = -O5 $(QOPT_DBG_FLAGS) $(QOPT_EXTRA)
+VOPT_FLAGS  = $(VOPT_DBG_FLAGS)
+QOPT_FLAGS  = $(QOPT_DBG_FLAGS) $(QOPT_EXTRA)
 
 VSIM_FLAGS  = -batch -l vsim.log -do "run $(RUN); quit" \
               -sv_seed $(SEED) +heartbeat=$(HEARTBEAT) $(TEST_PLUSARGS) \
@@ -288,7 +288,7 @@ QSIM_FLAGS  = -batch -l $(QSIM_LOG) -do "run $(RUN); quit" \
 # qrun: 1-step flow (vlog + vopt + vsim), Visualizer-native.
 QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps \
               -suppress 2583 -suppress 13314 -suppress 13288 \
-              -O5 -debug +designfile -qwavedb=+signal \
+              -debug +designfile -qwavedb=+signal \
               -batch -l qrun.log -do "run $(RUN); quit" \
               -sv_seed $(SEED) +heartbeat=$(HEARTBEAT) $(TEST_PLUSARGS) \
               -f $(RTL_FL) -f $(TB_FL) -top tb_top
@@ -440,7 +440,8 @@ qual_gui:
 clean:
 	rm -rf $(WORKLIB) transcript vsim.wlf tb.vcd design.bin \
 	       *.db *.log modelsim.ini .vscode \
-	       tb_top_opt covhtmlreport qrun.out *.xml
+	       tb_top_opt covhtmlreport qrun.out *.xml \
+		   fprofile *.part 
 	@echo "Clean complete"
 
 # Single-quoted echoes keep flag strings literal. $(VSIM_FLAGS) contains
