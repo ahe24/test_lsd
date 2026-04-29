@@ -28,10 +28,16 @@ module tb_top;
 
     always #2.5 clk = ~clk; // 200 MHz
 
-    // DUT — fully self-contained, only clock and reset cross the boundary.
+    // DUT — only clk/rst_n flow into the design.  design_tap is a 32-bit
+    // XOR-fold of all eight compute_island taps; the TB observes it once
+    // in the final block below, which is what keeps qopt -O5 from DCE-ing
+    // the compute chain.  See rtl/top/lsd_compute_islands.sv for the
+    // partition-friendly rationale.
+    logic [31:0] design_tap;
     lsd_top u_dut (
-        .clk   (clk),
-        .rst_n (rst_n)
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .design_tap (design_tap)
     );
 
     // -------------------------------------------------------------------------
@@ -77,6 +83,7 @@ module tb_top;
     end
 
     final begin
-        $display("[tb_top] FINAL-final t=%0t  heartbeats=%0d", $realtime, hb_ticks);
+        $display("[tb_top] FINAL-final t=%0t  heartbeats=%0d  design_tap=%08h",
+                 $realtime, hb_ticks, design_tap);
     end
 endmodule : tb_top

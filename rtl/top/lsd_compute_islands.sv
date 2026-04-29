@@ -1,19 +1,18 @@
 //==============================================================================
 // lsd_compute_islands.sv
 // Eight closed islands, each wrapping one lsd_heavy_compute instance with a
-// distinct SEED (so qopt cannot dedup them across instances).  External
-// interface is just (clk, rst_n).  These replace the previous bloat-farm
-// islands: the bloat farms generated thousands of unique modules but each
-// was so light qopt collapsed them to ~0% profiler weight, leaving crypto
-// as the sole significant block and capping psim speedup at the Amdahl
-// limit (~1.6x).  The compute islands are deliberately heavy each cycle
-// (memory + 256b multiplications), so total work scales with island count
-// and the partitioner has real CPU to redistribute.
+// distinct SEED.  Each island has only (clk, rst_n) as inputs and a single
+// 32-bit `tap` output that is XOR-folded into a design-level design_tap by
+// lsd_top — no system tasks live inside the island, so the partitioner is
+// free to place each island in whichever worker it likes.
 //
-// Eight islands (matching the previous bloat-island count) → with 5
-// functional islands (cnn / crypto / gfx / calu / eccd) the partitioner has
-// 13 atomic units to spread across (master + N workers), each with only
-// (clk, rst_n) crossing the partition boundary.
+// Why no `final $display(tap)` here?  Phase 3.0 used a final block to keep
+// `tap` observable, but $display is a master-scope system task and that
+// dragged every compute_island into the master partition (test_logs/
+// test1444 partition_analysis.txt: master 72.6% with all eight compute
+// islands hidden under tb_top scope).  Routing tap as a real output and
+// observing it once at $finish from tb_top achieves the same DCE-defeating
+// effect without forcing the partitioner's hand.
 //==============================================================================
 `ifndef LSD_COMPUTE_ISLANDS_SV
 `define LSD_COMPUTE_ISLANDS_SV
@@ -21,9 +20,9 @@
 `define LSD_COMPUTE_ISLAND(name, seed_const)                              \
 module name (                                                              \
     input  logic        clk,                                               \
-    input  logic        rst_n                                              \
+    input  logic        rst_n,                                             \
+    output logic [31:0] tap                                                \
 );                                                                         \
-    logic [31:0] tap;                                                      \
     lsd_heavy_compute #(                                                   \
         .MEM_DEPTH(1024),                                                  \
         .MEM_WIDTH(256),                                                   \
@@ -34,11 +33,6 @@ module name (                                                              \
         .rst_n(rst_n),                                                     \
         .tap  (tap)                                                        \
     );                                                                     \
-    /* `final` at $finish references tap, so qopt cannot DCE the engine: */\
-    /* the simulator must keep tap alive (and hence the whole compute    */\
-    /* chain) until end-of-sim.  This stays partition-local — no signal  */\
-    /* leaves the island besides clk/rst_n.                              */\
-    final $display("[compute_island] final tap=%08h", tap);                \
 endmodule
 
 `LSD_COMPUTE_ISLAND(lsd_compute0_island, 64'h0123_4567_89AB_CDEF)
