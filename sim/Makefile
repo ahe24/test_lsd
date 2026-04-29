@@ -24,7 +24,11 @@
 #  ParallelSim flow (qsim only)
 #    qual              run profiler+flps qualifier (defaults to stress)
 #    qfbk              optional feedback run (defaults to stress)
-#    psim FLPS=N       parallel run with N partitions (defaults to stress)
+#    psim FLPS=N       parallel run with N partitions (uses newest qual fdb)
+#    psim_nofdb FLPS=N same as psim but no qualifier feedback — try when
+#                      `make psim` keeps everything in master because the
+#                      qualifier verdict ("not likely to benefit") biases
+#                      the auto-partitioner.
 #    uni               single-core baseline (defaults to stress)
 #    Override workload: make qual WORKLOAD=balanced (or any target name above)
 #
@@ -289,7 +293,7 @@ QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps \
 
 # =============================================================================
 .PHONY: all sim smokesim balanced streaming command_storm crypto_heavy cnn_heavy \
-        eccd_only stress qual qfbk psim uni qual_gui clean \
+        eccd_only stress qual qfbk psim psim_nofdb uni qual_gui clean \
         workdir compile optimize run run_vsim run_qsim run_qrun info
 
 all: smokesim
@@ -401,6 +405,26 @@ psim:
 	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
 	    ENGINE=qsim DEBUG=$(MEASURE_DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-flps=$(FLPS)$(if $(FBK_FDB), -flpsfprof=$(FBK_FDB))" \
+	    QSIM_EXTRA="-flps" \
+	    QSIM_LOG=qsimparallelsim.log
+
+# psim_nofdb: same as psim but ignores the latest qualifier .fdb.
+#   Test_logs/test1501 showed the auto-partitioner pinning all eight
+#   compute_islands into master partition (49.8 % of profile weight)
+#   even at FLPS=8, after a qual run produced a "not likely to benefit"
+#   verdict.  Suspecting the verdict's influence on partition decisions,
+#   this target re-runs the auto-partitioner WITHOUT -flpsfprof so the
+#   qualifier's bias is removed and partition shape is decided purely
+#   from structural analysis.  Try this if `make psim` is still slower
+#   than `make uni`.
+psim_nofdb:
+	@if [ -z "$(FLPS)" ]; then \
+	    echo "[Makefile] FLPS is required (e.g. make psim_nofdb FLPS=4)"; \
+	    exit 1; \
+	fi
+	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
+	    ENGINE=qsim DEBUG=$(MEASURE_DEBUG) RUN="$(RUN)" \
+	    QOPT_EXTRA="-flps=$(FLPS)" \
 	    QSIM_EXTRA="-flps" \
 	    QSIM_LOG=qsimparallelsim.log
 
