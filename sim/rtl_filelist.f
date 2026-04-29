@@ -135,4 +135,6 @@
 ../rtl/top/lsd_interconnect.sv
 ../rtl/top/lsd_stream_fanout.sv
 ../rtl/top/lsd_stream_merge.sv
+../rtl/top/lsd_subsys_islands.sv
+../rtl/top/lsd_bloat_islands.sv
 ../rtl/top/lsd_top.sv

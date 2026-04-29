@@ -227,8 +227,12 @@ ECCD_ONLY_ARGS = \
     +eccd_cmd_period=2 +eccd_str_period=1
 
 # Long, full-bore run — qual / psim measurement baseline.
+# 1 ms HDL is chosen so per-process startup overhead (~2 s) is a small
+# fraction of total wall: with 4-core ParallelSim each partition sees
+# ~5-10 s of actual sim work, large enough for FLPS=3 to amortise its
+# fork/IPC cost and demonstrate measurable speedup.
 STRESS_ARGS = \
-    +run_ns=200000 \
+    +run_ns=1000000 \
     +cnn_cmd_period=2    +cnn_str_period=1 \
     +crypto_cmd_period=2 +crypto_str_period=1 \
     +gfx_cmd_period=2    +gfx_str_period=1 \
