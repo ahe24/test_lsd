@@ -46,6 +46,8 @@ covhtmlreport/
 qrun.out
 qrun.out/
 qone_tut*
+doc/*.txt
+test_logs/
 
 # -----------------------------------------------------------------------------
 # Visualizer runtime cache / config / profile

@@ -31,7 +31,12 @@
 #
 #  Knobs (override at CLI, e.g.  make stress ENGINE=qsim BLOAT_COUNT=2000)
 #    ENGINE       vsim | qsim | qrun           default: vsim
-#    DEBUG        wlf | vis                    default: vis  (qsim/qrun force vis)
+#    DEBUG        wlf | vis | off              default: vis
+#                   wlf : vsim-only +acc=npr + .wlf
+#                   vis : Visualizer (qwavedb + design.bin)
+#                   off : NO wave dump — used automatically by qual/qfbk/
+#                         psim/uni for measurement (wave logging was 60%
+#                         of wall time on stress and capped psim speedup)
 #    RUN          "-all" | "1 us" | …          default: -all (sim ends on $finish)
 #    SEED         <int>                        default: 1
 #    BLOAT_COUNT  per-family generator count   default: 1000  (total = 8 × this)
@@ -67,12 +72,23 @@ QOPT_EXTRA  ?=
 QSIM_EXTRA  ?=
 QSIM_LOG    ?= qsim.log
 
-# Only vsim supports the classic WLF debug flow; qsim/qrun force vis.
+# Only vsim supports the classic WLF debug flow; qsim/qrun reject it.
 ifneq ($(ENGINE),vsim)
-    ifneq ($(DEBUG),vis)
-        $(warning [Makefile] ENGINE=$(ENGINE) requires DEBUG=vis; overriding)
+    ifeq ($(DEBUG),wlf)
+        $(warning [Makefile] DEBUG=wlf is not supported for ENGINE=$(ENGINE); overriding to vis)
         override DEBUG = vis
     endif
+endif
+
+# DEBUG default for measurement targets (qual / qfbk / psim / uni).
+#   - If the user passed DEBUG=... on the command line, respect it.
+#   - Otherwise, force `off` so wave dumping doesn't dominate wall time.
+#     (Wave logging was 60% of wall in earlier stress runs and is master-
+#      serialised, so it caps any ParallelSim speedup at < 2x.)
+ifeq ($(origin DEBUG),command line)
+    MEASURE_DEBUG := $(DEBUG)
+else
+    MEASURE_DEBUG := off
 endif
 
 # -----------------------------------------------------------------------------
@@ -106,6 +122,18 @@ VLOG_FLAGS    = -sv -mfcu -timescale=1ns/1ps \
 VLOG_TB_FLAGS = $(VLOG_FLAGS)
 
 # --- Debug-mode-specific vopt / vsim flags
+#
+#  DEBUG=vis  : qwavedb + design.bin   (Visualizer-friendly, default for
+#               functional runs)
+#  DEBUG=wlf  : +acc=npr + .wlf        (vsim-only legacy waveform)
+#  DEBUG=off  : NO wave dump, NO -debug, NO +designfile.  Use this for
+#               *measurement* runs (qual / qfbk / psim / uni) — wave
+#               dumping is master-serialised and was eating ~60% of wall
+#               time on stress profiles, masking any ParallelSim gain.
+#
+# The ParallelSim flow targets below set DEBUG=off automatically; override
+# with DEBUG=vis on the command line if you also want a qwavedb during a
+# measurement run.
 ifeq ($(DEBUG),wlf)
     VOPT_DBG_FLAGS = +acc=npr
     VSIM_DBG_FLAGS = -wlf vsim.wlf
@@ -118,8 +146,13 @@ else ifeq ($(DEBUG),vis)
     VSIM_DBG_FLAGS = -qwavedb=+signal
     QOPT_DBG_FLAGS = -debug +designfile
     QSIM_DBG_FLAGS = -qwavedb=+signal
+else ifeq ($(DEBUG),off)
+    VOPT_DBG_FLAGS =
+    VSIM_DBG_FLAGS =
+    QOPT_DBG_FLAGS =
+    QSIM_DBG_FLAGS =
 else
-    $(error Unknown DEBUG=$(DEBUG) - valid: wlf | vis)
+    $(error Unknown DEBUG=$(DEBUG) - valid: wlf | vis | off)
 endif
 
 # -----------------------------------------------------------------------------
@@ -356,7 +389,7 @@ stress:
 # -----------------------------------------------------------------------------
 qual:
 	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
-	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	    ENGINE=qsim DEBUG=$(MEASURE_DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-fprofile+flps" QSIM_EXTRA="-fprofile+flps" \
 	    QSIM_LOG=qsim_qual.log
 
@@ -366,7 +399,7 @@ qfbk:
 	    exit 1; \
 	fi
 	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
-	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	    ENGINE=qsim DEBUG=$(MEASURE_DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-fprofile+flps -flpsfprof=$(FBK_FDB)" \
 	    QSIM_EXTRA="-fprofile+flps" \
 	    QSIM_LOG=qsim_qfbk.log
@@ -377,14 +410,14 @@ psim:
 	    exit 1; \
 	fi
 	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
-	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	    ENGINE=qsim DEBUG=$(MEASURE_DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-flps=$(FLPS)$(if $(FBK_FDB), -flpsfprof=$(FBK_FDB))" \
 	    QSIM_EXTRA="-flps" \
 	    QSIM_LOG=qsimparallelsim.log
 
 uni:
 	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
-	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	    ENGINE=qsim DEBUG=$(MEASURE_DEBUG) RUN="$(RUN)" \
 	    QSIM_LOG=qsimuni.log
 
 qual_gui:
@@ -402,6 +435,7 @@ clean:
 info:
 	@echo 'ENGINE        = $(ENGINE)'
 	@echo 'DEBUG         = $(DEBUG)'
+	@echo 'MEASURE_DEBUG = $(MEASURE_DEBUG)   (used by qual/qfbk/psim/uni)'
 	@echo 'SEED          = $(SEED)'
 	@echo 'BLOAT_COUNT   = $(BLOAT_COUNT)'
 	@echo 'HEARTBEAT     = $(HEARTBEAT) ns'
