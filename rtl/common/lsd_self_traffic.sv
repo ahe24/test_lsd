@@ -2,21 +2,22 @@
 // lsd_self_traffic.sv
 // Per-subsystem self-driving stimulus block.  Owns one cmd master + one
 // stream producer + one stream consumer, all driven by an internal PRBS
-// source.  The point: each subsystem becomes a closed traffic island that
-// ParallelSim can place in its own partition without any cross-partition
-// virtual-interface or testbench dependency.
+// source.  Each instance is a closed traffic island: ParallelSim can place
+// it in its own partition without any cross-partition handle from the
+// testbench.
 //
-// All control is statically parameterised — no plusargs, no DPI, no XMR —
-// so qopt can fully resolve the partition footprint at elaboration time.
+// PLUSARG INTERFACE (read once at time 0, then frozen)
+// ----------------------------------------------------
+// INST_TAG = "cnn"  ⇒
+//   +cnn_cmd_period=<int>   per-cycle cmd issuance period (default = CMD_PERIOD)
+//   +cnn_str_period=<int>   per-cycle stream beat period  (default = STREAM_PERIOD)
+//   +cnn_disable=<0|1>      mute this island entirely (cmd/stream stay quiet,
+//                           consumer stays ready)         (default = 0)
 //
-//   * cmd master path  : one cmd issued every CMD_PERIOD cycles (gated by
-//                        cmd_ready).  rsp_ready is held high.
-//   * stream input     : valid asserted every STREAM_PERIOD cycles, data
-//                        is the PRBS register replicated across W bits.
-//   * stream output    : ready held high so producer never back-pressures.
-//
-// SUB_KIND parameter is purely cosmetic (it XORs into the PRBS seed so each
-// instance gets a distinct, but reproducible, traffic stream).
+// Reading once and storing in module-local registers means the testbench
+// never reaches *into* the module at runtime — every signal that crosses
+// the partition boundary is determined at $value$plusargs() time, which
+// happens before any clocked simulation.  Safe for ParallelSim FoU.
 //==============================================================================
 `ifndef LSD_SELF_TRAFFIC_SV
 `define LSD_SELF_TRAFFIC_SV
@@ -27,9 +28,10 @@ module lsd_self_traffic
     parameter int unsigned       W              = 512,
     parameter logic [31:0]       SEED           = 32'h1234_5678,
     parameter logic [31:0]       POLY           = 32'hEDB8_8320,
-    parameter int unsigned       CMD_PERIOD     = 8,    // cycles between cmds
-    parameter int unsigned       STREAM_PERIOD  = 1,    // cycles between beats
-    parameter sub_e              SUB_KIND       = SUB_CNN
+    parameter int unsigned       CMD_PERIOD     = 8,    // cycles between cmds (default)
+    parameter int unsigned       STREAM_PERIOD  = 1,    // cycles between beats (default)
+    parameter sub_e              SUB_KIND       = SUB_CNN,
+    parameter string             INST_TAG       = "x"
 ) (
     input  logic                clk,
     input  logic                rst_n,
@@ -38,42 +40,84 @@ module lsd_self_traffic
     lsd_stream_if.consumer      out_s
 );
     // -------------------------------------------------------------------------
+    // Plusarg-overridable knobs.  Captured at time 0; after that the values
+    // never change, so no tb→DUT signal crosses the partition wall.
+    // -------------------------------------------------------------------------
+    int  cmd_period_eff;
+    int  str_period_eff;
+    int  disable_eff;
+
+    initial begin
+        string s;
+        cmd_period_eff = CMD_PERIOD;
+        str_period_eff = STREAM_PERIOD;
+        disable_eff    = 0;
+        $sformat(s, "%0s_cmd_period=%%d", INST_TAG);
+        void'($value$plusargs(s, cmd_period_eff));
+        $sformat(s, "%0s_str_period=%%d", INST_TAG);
+        void'($value$plusargs(s, str_period_eff));
+        $sformat(s, "%0s_disable=%%d",    INST_TAG);
+        void'($value$plusargs(s, disable_eff));
+        if (cmd_period_eff < 1) cmd_period_eff = 1;
+        if (str_period_eff < 1) str_period_eff = 1;
+        $display("[self_traffic %0s] cmd_period=%0d str_period=%0d disable=%0d",
+                 INST_TAG, cmd_period_eff, str_period_eff, disable_eff);
+    end
+
+    // -------------------------------------------------------------------------
     // PRBS engines: one for cmd, one for stream — different polynomials so
     // the two streams aren't trivially correlated.
     // -------------------------------------------------------------------------
     logic [31:0] prbs_cmd_data;
-    logic        prbs_cmd_bit;
-    logic        cmd_pulse;
-
     logic [31:0] prbs_str_data;
-    logic        prbs_str_bit;
-    logic        str_pulse;
 
     lsd_prbs_driver #(
-        .WIDTH        (32),
-        .SEED         (SEED ^ 32'hA5A5_A5A5),
-        .POLY         (POLY),
-        .PULSE_PERIOD (CMD_PERIOD)
+        .WIDTH(32),
+        .SEED (SEED ^ 32'hA5A5_A5A5),
+        .POLY (POLY)
     ) u_prbs_cmd (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .prbs_data (prbs_cmd_data),
-        .prbs_bit  (prbs_cmd_bit),
-        .pulse     (cmd_pulse)
+        .clk      (clk),
+        .rst_n    (rst_n),
+        .prbs_data(prbs_cmd_data),
+        .prbs_bit ()
     );
 
     lsd_prbs_driver #(
-        .WIDTH        (32),
-        .SEED         (SEED ^ 32'h5A5A_5A5A),
-        .POLY         (32'h04C1_1DB7),
-        .PULSE_PERIOD (STREAM_PERIOD)
+        .WIDTH(32),
+        .SEED (SEED ^ 32'h5A5A_5A5A),
+        .POLY (32'h04C1_1DB7)
     ) u_prbs_str (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .prbs_data (prbs_str_data),
-        .prbs_bit  (prbs_str_bit),
-        .pulse     (str_pulse)
+        .clk      (clk),
+        .rst_n    (rst_n),
+        .prbs_data(prbs_str_data),
+        .prbs_bit ()
     );
+
+    // -------------------------------------------------------------------------
+    // Period dividers — runtime configurable counters.
+    // -------------------------------------------------------------------------
+    int   cmd_div_cnt;
+    int   str_div_cnt;
+    logic cmd_pulse_raw;
+    logic str_pulse_raw;
+    logic cmd_pulse;
+    logic str_pulse;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                                 cmd_div_cnt <= 0;
+        else if (cmd_div_cnt + 1 >= cmd_period_eff) cmd_div_cnt <= 0;
+        else                                        cmd_div_cnt <= cmd_div_cnt + 1;
+    end
+    assign cmd_pulse_raw = (cmd_div_cnt + 1 >= cmd_period_eff);
+    assign cmd_pulse     = cmd_pulse_raw & ~|disable_eff;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                                 str_div_cnt <= 0;
+        else if (str_div_cnt + 1 >= str_period_eff) str_div_cnt <= 0;
+        else                                        str_div_cnt <= str_div_cnt + 1;
+    end
+    assign str_pulse_raw = (str_div_cnt + 1 >= str_period_eff);
+    assign str_pulse     = str_pulse_raw & ~|disable_eff;
 
     // -------------------------------------------------------------------------
     // Cmd master: hold cmd_valid until handshake, then re-arm on next pulse.
@@ -88,12 +132,10 @@ module lsd_self_traffic
             tag_ctr     <= '0;
             cmd_r       <= '0;
         end else begin
-            // Clear after handshake.
             if (cmd_valid_r && cmd_if.cmd_ready) begin
                 cmd_valid_r <= 1'b0;
                 tag_ctr     <= tag_ctr + 1'b1;
             end
-            // Arm a new cmd when the pulse fires and we're not already busy.
             if (!cmd_valid_r && cmd_pulse) begin
                 cmd_valid_r  <= 1'b1;
                 cmd_r.tag    <= tag_ctr;
@@ -106,7 +148,7 @@ module lsd_self_traffic
         end
     end
 
-    assign cmd_if.cmd_valid = cmd_valid_r;
+    assign cmd_if.cmd_valid = cmd_valid_r & ~|disable_eff;
     assign cmd_if.cmd       = cmd_r;
     assign cmd_if.rsp_ready = 1'b1;   // always drain responses
 
@@ -134,7 +176,6 @@ module lsd_self_traffic
                 beat_ctr   <= beat_ctr + 1'b1;
             end
             if (!in_valid_r && str_pulse) begin
-                // Build a wide data word by tiling the 32-bit PRBS state.
                 logic [W-1:0] wide;
                 for (int i = 0; i < W/32; i++) begin
                     wide[i*32 +: 32] = prbs_str_data
@@ -150,7 +191,7 @@ module lsd_self_traffic
         end
     end
 
-    assign in_s.valid = in_valid_r;
+    assign in_s.valid = in_valid_r & ~|disable_eff;
     assign in_s.data  = in_data_r;
     assign in_s.sop   = in_sop_r;
     assign in_s.eop   = in_eop_r;
@@ -167,8 +208,6 @@ module lsd_self_traffic
     end
     assign out_s.ready = 1'b1;
 
-    // Keep out_beats observable so it isn't optimised away. Synthesis tools
-    // would warn but qopt treats this as a normal floating output.
     /* verilator lint_off UNUSEDSIGNAL */
     wire _unused_ok = |out_beats ^ |prbs_cmd_data ^ |prbs_str_data;
     /* verilator lint_on UNUSEDSIGNAL */

@@ -1,46 +1,48 @@
 # =============================================================================
-#  LSD Simulation Makefile  (Questasim / Questa One Sim)
+#  LSD Simulation Makefile  (Questasim / Questa One Sim)  -  UVM-FREE
 # -----------------------------------------------------------------------------
-#  Targets
-#    sim smokesim bmtsim stress   run a UVM test (default ENGINE=vsim)
-#    qual qfbk psim uni           ParallelSim flow (qsim only) — see below
-#    gen                          regenerate bloat farms if stale (cached)
-#    clean-gen                    wipe gen stamps (force full regen next run)
-#    clean                        remove build artifacts
-#    info                         print current knob values
+#  Phase 1.5: the testbench is plain SystemVerilog (no UVM), and per-subsystem
+#  stimulus comes from RTL-internal PRBS islands (lsd_self_traffic.sv).  Each
+#  named test target below selects a different traffic profile by passing
+#  plusargs that the islands read once at time 0, so the whole flow is
+#  ParallelSim Field-of-Use friendly (no virtual interfaces, no UVM VPI hub).
 #
-#  Knobs  (override at CLI, e.g.  make sim ENGINE=qrun BLOAT_COUNT=5000 RUN="1 us")
+#  Workload targets (functional)
+#    smokesim          quick sanity (5 us, light traffic)
+#    balanced          equal load across all 5 subsystems (50 us)
+#    streaming         streams maxed, cmds light                 (50 us)
+#    command_storm     cmd ports maxed, streams light            (20 us)
+#    crypto_heavy      crypto dominates (Amdahl bound test)      (50 us)
+#    cnn_heavy         cnn dominates                             (50 us)
+#    eccd_only         all other subsystems disabled             (10 us)
+#    stress            everything maxed, long run (200 us)       — psim baseline
+#
+#  ParallelSim flow (qsim only)
+#    qual              run profiler+flps qualifier (defaults to stress)
+#    qfbk              optional feedback run (defaults to stress)
+#    psim FLPS=N       parallel run with N partitions (defaults to stress)
+#    uni               single-core baseline (defaults to stress)
+#    Override workload: make qual WORKLOAD=balanced (or any target name above)
+#
+#  Misc
+#    gen / clean-gen   bloat-farm (re)generation
+#    clean             remove build artifacts
+#    info              print current knob values
+#
+#  Knobs (override at CLI, e.g.  make stress ENGINE=qsim BLOAT_COUNT=2000)
 #    ENGINE       vsim | qsim | qrun           default: vsim
-#    DEBUG        wlf | vis                    default: vis    (qsim/qrun force vis)
-#    RUN          "-all" | "1 us" | "100 ns"   default: -all   (run until $finish)
-#    TEST         <uvm_test class name>        default: lsd_smoke_test
+#    DEBUG        wlf | vis                    default: vis  (qsim/qrun force vis)
+#    RUN          "-all" | "1 us" | …          default: -all (sim ends on $finish)
 #    SEED         <int>                        default: 1
-#    VERB         UVM_NONE..UVM_FULL           default: UVM_MEDIUM
-#    BLOAT_COUNT  per-family generator count   default: 1000   (total modules = 8 x this)
+#    BLOAT_COUNT  per-family generator count   default: 1000  (total = 8 × this)
 #    HEARTBEAT    ns between progress prints   default: 10000
+#    WORKLOAD     test profile name (see above) default: stress (used by qual/etc.)
+#    WORKLOAD_ARGS direct plusarg list          default: derived from WORKLOAD
 #    FLPS         ParallelSim partitions       default: (unset; required for psim)
 #    FBK_FDB      qsim.fdb for feedback flow   default: newest fprofile/*.fdb
 #    QOPT_EXTRA   appended to QOPT_FLAGS       default: empty
 #    QSIM_EXTRA   appended to QSIM_FLAGS       default: empty
 #    QSIM_LOG     qsim transcript filename     default: qsim.log
-#
-#  Debug modes (waveforms are always dumped; no GUI launch from this flow):
-#    DEBUG=wlf    vopt +acc=npr    + vsim -wlf vsim.wlf   (vsim engine only)
-#    DEBUG=vis    vopt +designfile + vsim -qwavedb        (Visualizer)
-#    Open the WLF or design.bin separately once the batch run completes.
-#
-#  ParallelSim flow  (Questa One tutorial Ch. 1; qsim engine only)
-#    1) make qual                Qualifier run.  Open `qsim -fprofile+flps`
-#                                in the GUI and read the recommended N from
-#                                the Partition Analysis window.
-#    2) make qfbk                (Optional) Qualifier feedback run — only if
-#                                qual flags unsupported dynamic external
-#                                accesses (e.g. UVM-HDL backdoor reads).
-#                                Auto-picks newest fprofile/*.fdb.
-#    3) make psim FLPS=N         ParallelSim run with N partitions.
-#                                Auto-attaches FBK_FDB if step 2 was run.
-#    4) make uni                 Single-core baseline.  Diff qsimuni.log
-#                                against qsimparallelsim.log to see gain.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -48,15 +50,15 @@
 # -----------------------------------------------------------------------------
 ENGINE      ?= vsim
 RUN         ?= -all
-#DEBUG       ?= wlf
 DEBUG       ?= vis
-
-TEST        ?= lsd_smoke_test
 SEED        ?= 1
-VERB        ?= UVM_MEDIUM
-
 BLOAT_COUNT ?= 1000
 HEARTBEAT   ?= 10000
+
+# Workload selector for qual / qfbk / psim / uni.  WORKLOAD_ARGS, if set
+# directly, takes precedence over the named WORKLOAD profile.
+WORKLOAD       ?= stress
+WORKLOAD_ARGS  ?=
 
 # ParallelSim (qsim only) — see "ParallelSim flow" in the header.
 FLPS        ?=
@@ -93,21 +95,18 @@ endif
 #   Past ~50000 per family, vopt RAM can blow up — consider a 2-level farm.
 # -----------------------------------------------------------------------------
 
-# --- File lists and libraries (UVM_LIB is Questa's precompiled UVM)
+# --- File lists and libraries
 RTL_FL      = rtl_filelist.f
 TB_FL       = tb_filelist.f
-UVM_LIB     = mtiUvm
 WORKLIB     = work
 
-# --- Compile flags
-VLOG_FLAGS  = -sv -mfcu -timescale=1ns/1ps \
-              -suppress 2583 -suppress 13314 -suppress 13288 \
-              +define+UVM_NO_DEPRECATED
-VLOG_TB_FLAGS = $(VLOG_FLAGS) -L $(UVM_LIB)
+# --- Compile flags  (no UVM library, no UVM defines)
+VLOG_FLAGS    = -sv -mfcu -timescale=1ns/1ps \
+                -suppress 2583 -suppress 13314 -suppress 13288
+VLOG_TB_FLAGS = $(VLOG_FLAGS)
 
 # --- Debug-mode-specific vopt / vsim flags
 ifeq ($(DEBUG),wlf)
-    # Classic access + WLF waveform log
     VOPT_DBG_FLAGS = +acc=npr
     VSIM_DBG_FLAGS = -wlf vsim.wlf
     QOPT_DBG_FLAGS = $(error DEBUG=wlf is not supported for ENGINE=qsim)
@@ -116,61 +115,149 @@ else ifeq ($(DEBUG),vis)
     # Visualizer: vopt emits design.bin; vsim records qwavedb.
     # NOTE: +acc is NOT permitted alongside -debug +designfile.
     VOPT_DBG_FLAGS = -debug +designfile
-    VSIM_DBG_FLAGS = -qwavedb=+signal+class
+    VSIM_DBG_FLAGS = -qwavedb=+signal
     QOPT_DBG_FLAGS = -debug +designfile
-    QSIM_DBG_FLAGS = -qwavedb=+signal+class
+    QSIM_DBG_FLAGS = -qwavedb=+signal
 else
     $(error Unknown DEBUG=$(DEBUG) - valid: wlf | vis)
 endif
 
-# --- Aggregated per-tool flags
-#     QOPT_EXTRA / QSIM_EXTRA are passthrough hooks for the ParallelSim flow
-#     (qual / qfbk / psim) and any ad-hoc qopt|qsim switches.
-VOPT_FLAGS  = -O5 -L $(UVM_LIB) $(VOPT_DBG_FLAGS)
-QOPT_FLAGS  = -O5 -L $(UVM_LIB) $(QOPT_DBG_FLAGS) $(QOPT_EXTRA)
+# -----------------------------------------------------------------------------
+# Workload profiles — plusargs read once at time 0 by lsd_self_traffic.
+#
+# Per-instance plusarg names (INST_TAG ∈ cnn / crypto / gfx / calu / eccd):
+#   +<TAG>_cmd_period=<int>   cycles between cmd issuances (>=1)
+#   +<TAG>_str_period=<int>   cycles between stream beats  (>=1)
+#   +<TAG>_disable=<0|1>      mute this island entirely
+#
+# Top-level run length:
+#   +run_ns=<int>             tb_top calls $finish after this many ns
+# -----------------------------------------------------------------------------
 
-VSIM_FLAGS  = -batch -l vsim.log -do "run $(RUN); quit" -L $(UVM_LIB) \
-              -sv_seed $(SEED) +UVM_TESTNAME=$(TEST) +UVM_VERBOSITY=$(VERB) \
-              +heartbeat=$(HEARTBEAT) \
+# Quick sanity — light traffic, short run.
+SMOKE_ARGS = \
+    +run_ns=5000 \
+    +cnn_cmd_period=8    +cnn_str_period=4 \
+    +crypto_cmd_period=8 +crypto_str_period=4 \
+    +gfx_cmd_period=8    +gfx_str_period=4 \
+    +calu_cmd_period=8   +calu_str_period=4 \
+    +eccd_cmd_period=8   +eccd_str_period=4
+
+# Equal load across all 5 subsystems — the geometry ParallelSim *should* like.
+BALANCED_ARGS = \
+    +run_ns=50000 \
+    +cnn_cmd_period=4    +cnn_str_period=1 \
+    +crypto_cmd_period=4 +crypto_str_period=1 \
+    +gfx_cmd_period=4    +gfx_str_period=1 \
+    +calu_cmd_period=4   +calu_str_period=1 \
+    +eccd_cmd_period=4   +eccd_str_period=1
+
+# Streams maxed, cmd ports quiet — exercise data-paths.
+STREAMING_ARGS = \
+    +run_ns=50000 \
+    +cnn_cmd_period=16    +cnn_str_period=1 \
+    +crypto_cmd_period=16 +crypto_str_period=1 \
+    +gfx_cmd_period=16    +gfx_str_period=1 \
+    +calu_cmd_period=16   +calu_str_period=1 \
+    +eccd_cmd_period=16   +eccd_str_period=1
+
+# Cmd ports maxed, streams quiet — exercise control-paths.
+COMMAND_STORM_ARGS = \
+    +run_ns=20000 \
+    +cnn_cmd_period=1    +cnn_str_period=16 \
+    +crypto_cmd_period=1 +crypto_str_period=16 \
+    +gfx_cmd_period=1    +gfx_str_period=16 \
+    +calu_cmd_period=1   +calu_str_period=16 \
+    +eccd_cmd_period=1   +eccd_str_period=16
+
+# One block dominates — Amdahl bound (psim should win less here).
+CRYPTO_HEAVY_ARGS = \
+    +run_ns=50000 \
+    +cnn_cmd_period=32    +cnn_str_period=8 \
+    +crypto_cmd_period=1  +crypto_str_period=1 \
+    +gfx_cmd_period=32    +gfx_str_period=8 \
+    +calu_cmd_period=32   +calu_str_period=8 \
+    +eccd_cmd_period=32   +eccd_str_period=8
+
+CNN_HEAVY_ARGS = \
+    +run_ns=50000 \
+    +cnn_cmd_period=1     +cnn_str_period=1 \
+    +crypto_cmd_period=32 +crypto_str_period=8 \
+    +gfx_cmd_period=32    +gfx_str_period=8 \
+    +calu_cmd_period=32   +calu_str_period=8 \
+    +eccd_cmd_period=32   +eccd_str_period=8
+
+# Single-island run — others muted.  Useful for partition-isolation experiments.
+ECCD_ONLY_ARGS = \
+    +run_ns=10000 \
+    +cnn_disable=1 +crypto_disable=1 +gfx_disable=1 +calu_disable=1 \
+    +eccd_cmd_period=2 +eccd_str_period=1
+
+# Long, full-bore run — qual / psim measurement baseline.
+STRESS_ARGS = \
+    +run_ns=200000 \
+    +cnn_cmd_period=2    +cnn_str_period=1 \
+    +crypto_cmd_period=2 +crypto_str_period=1 \
+    +gfx_cmd_period=2    +gfx_str_period=1 \
+    +calu_cmd_period=2   +calu_str_period=1 \
+    +eccd_cmd_period=2   +eccd_str_period=1
+
+# Resolve WORKLOAD → plusarg list for measurement targets.  WORKLOAD_ARGS
+# (if user-set directly) wins.
+ifeq ($(strip $(WORKLOAD_ARGS)),)
+  ifeq ($(WORKLOAD),smoke)
+    WORKLOAD_ARGS := $(SMOKE_ARGS)
+  else ifeq ($(WORKLOAD),balanced)
+    WORKLOAD_ARGS := $(BALANCED_ARGS)
+  else ifeq ($(WORKLOAD),streaming)
+    WORKLOAD_ARGS := $(STREAMING_ARGS)
+  else ifeq ($(WORKLOAD),command_storm)
+    WORKLOAD_ARGS := $(COMMAND_STORM_ARGS)
+  else ifeq ($(WORKLOAD),crypto_heavy)
+    WORKLOAD_ARGS := $(CRYPTO_HEAVY_ARGS)
+  else ifeq ($(WORKLOAD),cnn_heavy)
+    WORKLOAD_ARGS := $(CNN_HEAVY_ARGS)
+  else ifeq ($(WORKLOAD),eccd_only)
+    WORKLOAD_ARGS := $(ECCD_ONLY_ARGS)
+  else ifeq ($(WORKLOAD),stress)
+    WORKLOAD_ARGS := $(STRESS_ARGS)
+  else
+    $(error Unknown WORKLOAD=$(WORKLOAD) - valid: smoke balanced streaming command_storm crypto_heavy cnn_heavy eccd_only stress)
+  endif
+endif
+
+# Plusargs supplied to a single run.  Per-target recipes set TEST_PLUSARGS.
+TEST_PLUSARGS ?=
+
+# --- Aggregated per-tool flags
+VOPT_FLAGS  = -O5 $(VOPT_DBG_FLAGS)
+QOPT_FLAGS  = -O5 $(QOPT_DBG_FLAGS) $(QOPT_EXTRA)
+
+VSIM_FLAGS  = -batch -l vsim.log -do "run $(RUN); quit" \
+              -sv_seed $(SEED) +heartbeat=$(HEARTBEAT) $(TEST_PLUSARGS) \
               $(VSIM_DBG_FLAGS)
 
-QSIM_FLAGS  = -batch -l $(QSIM_LOG) -do "run $(RUN); quit" -L $(UVM_LIB) \
-              -sv_seed $(SEED) +UVM_TESTNAME=$(TEST) +UVM_VERBOSITY=$(VERB) \
-              +heartbeat=$(HEARTBEAT) \
+QSIM_FLAGS  = -batch -l $(QSIM_LOG) -do "run $(RUN); quit" \
+              -sv_seed $(SEED) +heartbeat=$(HEARTBEAT) $(TEST_PLUSARGS) \
               $(QSIM_DBG_FLAGS) $(QSIM_EXTRA)
 
 # qrun: 1-step flow (vlog + vopt + vsim), Visualizer-native.
-#   - Do NOT pass -compile / -optimize / -simulate: those are PHASE selectors
-#     that stop qrun early. For a full run, pass no phase flag. (-O5 is the
-#     optimization LEVEL and is fine.)
-#   - Do NOT pass -uvm: that recompiles UVM DPI sources and needs a host
-#     C/C++ compiler (vlog-7019). -L $(UVM_LIB) links the precompiled UVM
-#     library instead, matching the vsim flow.
 QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps \
               -suppress 2583 -suppress 13314 -suppress 13288 \
-              +define+UVM_NO_DEPRECATED \
-              -L $(UVM_LIB) -uvmcontrol=all \
-              -O5 -debug +designfile -qwavedb=+signal+class \
+              -O5 -debug +designfile -qwavedb=+signal \
               -batch -l qrun.log -do "run $(RUN); quit" \
-              -sv_seed $(SEED) +UVM_TESTNAME=$(TEST) +UVM_VERBOSITY=$(VERB) \
-              +heartbeat=$(HEARTBEAT) \
+              -sv_seed $(SEED) +heartbeat=$(HEARTBEAT) $(TEST_PLUSARGS) \
               -f $(RTL_FL) -f $(TB_FL) -top tb_top
 
 # =============================================================================
-.PHONY: all sim smokesim bmtsim stress qual qfbk psim uni gen clean-gen clean \
+.PHONY: all sim smokesim balanced streaming command_storm crypto_heavy cnn_heavy \
+        eccd_only stress qual qfbk psim uni qual_gui gen clean-gen clean \
         workdir compile optimize run run_vsim run_qsim run_qrun info
 
-all: sim
+all: smokesim
 
 # -----------------------------------------------------------------------------
 # gen — regenerate bloat farms, cached by per-family stamp file.
-#
-#   Stamp path encodes BLOAT_COUNT, so changing the count picks up a missing
-#   target and forces regen. Touching a tools/gen_<family>.py invalidates
-#   only that family's stamp. Up-to-date families are skipped.
-#
-#     Force full regen:    make clean-gen gen
-#     Force one family:    rm ../rtl/gen/<family>/.stamp-* && make gen
 # -----------------------------------------------------------------------------
 BLOAT_FAMILIES := bloat bloat2 churn grind haze prism echo vortex
 BLOAT_STAMPS   := $(foreach f,$(BLOAT_FAMILIES),../rtl/gen/$(f)/.stamp-$(BLOAT_COUNT))
@@ -204,8 +291,6 @@ else ifeq ($(ENGINE),qsim)
 endif
 
 # --- Run — dispatches to the selected engine.
-#     The `optimize`/`compile` deps live on run_vsim / run_qsim, not on `run`.
-#     qrun is 1-step and must not be preceded by vlog/vopt.
 run:
 ifeq ($(ENGINE),vsim)
 	$(MAKE) run_vsim
@@ -218,32 +303,60 @@ else
 endif
 
 run_vsim: optimize
-	vsim $(VSIM_FLAGS) -uvmcontrol=all tb_top_opt
+	vsim $(VSIM_FLAGS) tb_top_opt
 
 run_qsim: optimize
-	qsim $(QSIM_FLAGS) -uvmcontrol=all tb_top_opt
+	qsim $(QSIM_FLAGS) tb_top_opt
 
 run_qrun: gen
 	qrun $(QRUN_FLAGS)
 
-# --- Top-level test entry points
-sim:
-	$(MAKE) run TEST=lsd_stress_test ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+# -----------------------------------------------------------------------------
+# Per-workload functional targets — each picks a different traffic profile.
+# Re-uses one compile via TEST_PLUSARGS; no recompile per profile.
+# -----------------------------------------------------------------------------
+sim:           stress
 
 smokesim:
-	$(MAKE) run TEST=lsd_smoke_test  ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+	$(MAKE) run TEST_PLUSARGS="$(SMOKE_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
 
-bmtsim:
-	$(MAKE) run TEST=lsd_bmt_test    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+balanced:
+	$(MAKE) run TEST_PLUSARGS="$(BALANCED_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+
+streaming:
+	$(MAKE) run TEST_PLUSARGS="$(STREAMING_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+
+command_storm:
+	$(MAKE) run TEST_PLUSARGS="$(COMMAND_STORM_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+
+crypto_heavy:
+	$(MAKE) run TEST_PLUSARGS="$(CRYPTO_HEAVY_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+
+cnn_heavy:
+	$(MAKE) run TEST_PLUSARGS="$(CNN_HEAVY_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+
+eccd_only:
+	$(MAKE) run TEST_PLUSARGS="$(ECCD_ONLY_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
 
 stress:
-	$(MAKE) run TEST=lsd_stress_test ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
+	$(MAKE) run TEST_PLUSARGS="$(STRESS_ARGS)" \
+	    ENGINE=$(ENGINE) DEBUG=$(DEBUG) RUN="$(RUN)"
 
 # -----------------------------------------------------------------------------
-# ParallelSim (qsim only) — see header for the four-phase flow.
+# ParallelSim measurement flow (qsim only)
+#   The default workload is `stress`; override with WORKLOAD=<name> or
+#   WORKLOAD_ARGS="+...".
 # -----------------------------------------------------------------------------
 qual:
-	$(MAKE) run TEST=$(TEST) ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
+	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-fprofile+flps" QSIM_EXTRA="-fprofile+flps" \
 	    QSIM_LOG=qsim_qual.log
 
@@ -252,7 +365,8 @@ qfbk:
 	    echo "[Makefile] FBK_FDB empty and no fprofile/*.fdb found - run 'make qual' first"; \
 	    exit 1; \
 	fi
-	$(MAKE) run TEST=$(TEST) ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
+	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-fprofile+flps -flpsfprof=$(FBK_FDB)" \
 	    QSIM_EXTRA="-fprofile+flps" \
 	    QSIM_LOG=qsim_qfbk.log
@@ -262,14 +376,19 @@ psim:
 	    echo "[Makefile] FLPS is required (e.g. make psim FLPS=3) - run 'make qual' to find N"; \
 	    exit 1; \
 	fi
-	$(MAKE) run TEST=$(TEST) ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
+	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
 	    QOPT_EXTRA="-flps=$(FLPS)$(if $(FBK_FDB), -flpsfprof=$(FBK_FDB))" \
 	    QSIM_EXTRA="-flps" \
 	    QSIM_LOG=qsimparallelsim.log
 
 uni:
-	$(MAKE) run TEST=$(TEST) ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
+	$(MAKE) run TEST_PLUSARGS="$(WORKLOAD_ARGS)" \
+	    ENGINE=qsim DEBUG=$(DEBUG) RUN="$(RUN)" \
 	    QSIM_LOG=qsimuni.log
+
+qual_gui:
+	qsim -fprofile+flps &
 
 clean:
 	rm -rf $(WORKLIB) transcript vsim.wlf tb.vcd design.bin \
@@ -281,20 +400,22 @@ clean:
 # `-do "run $(RUN); quit"`, whose embedded " and ; would otherwise break
 # out of a double-quoted echo and fail at the shell.
 info:
-	@echo 'ENGINE      = $(ENGINE)'
-	@echo 'DEBUG       = $(DEBUG)'
-	@echo 'TEST        = $(TEST)'
-	@echo 'SEED        = $(SEED)'
-	@echo 'BLOAT_COUNT = $(BLOAT_COUNT)'
-	@echo 'HEARTBEAT   = $(HEARTBEAT) ns'
-	@echo 'RUN         = $(RUN)'
-	@echo 'FLPS        = $(FLPS)'
-	@echo 'FBK_FDB     = $(FBK_FDB)'
-	@echo 'QOPT_EXTRA  = $(QOPT_EXTRA)'
-	@echo 'QSIM_EXTRA  = $(QSIM_EXTRA)'
-	@echo 'QSIM_LOG    = $(QSIM_LOG)'
-	@echo 'VOPT flags  = $(VOPT_FLAGS)'
-	@echo 'VSIM flags  = $(VSIM_FLAGS)'
-	@echo 'QOPT flags  = $(QOPT_FLAGS)'
-	@echo 'QSIM flags  = $(QSIM_FLAGS)'
-	@echo 'QRUN flags  = $(QRUN_FLAGS)'
+	@echo 'ENGINE        = $(ENGINE)'
+	@echo 'DEBUG         = $(DEBUG)'
+	@echo 'SEED          = $(SEED)'
+	@echo 'BLOAT_COUNT   = $(BLOAT_COUNT)'
+	@echo 'HEARTBEAT     = $(HEARTBEAT) ns'
+	@echo 'RUN           = $(RUN)'
+	@echo 'WORKLOAD      = $(WORKLOAD)'
+	@echo 'WORKLOAD_ARGS = $(WORKLOAD_ARGS)'
+	@echo 'TEST_PLUSARGS = $(TEST_PLUSARGS)'
+	@echo 'FLPS          = $(FLPS)'
+	@echo 'FBK_FDB       = $(FBK_FDB)'
+	@echo 'QOPT_EXTRA    = $(QOPT_EXTRA)'
+	@echo 'QSIM_EXTRA    = $(QSIM_EXTRA)'
+	@echo 'QSIM_LOG      = $(QSIM_LOG)'
+	@echo 'VOPT flags    = $(VOPT_FLAGS)'
+	@echo 'VSIM flags    = $(VSIM_FLAGS)'
+	@echo 'QOPT flags    = $(QOPT_FLAGS)'
+	@echo 'QSIM flags    = $(QSIM_FLAGS)'
+	@echo 'QRUN flags    = $(QRUN_FLAGS)'

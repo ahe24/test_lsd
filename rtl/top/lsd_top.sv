@@ -53,7 +53,8 @@ module lsd_top (
     // -------------------------------------------------------------------------
     lsd_self_traffic #(
         .SEED(32'h0BAD_F00D), .POLY(32'hEDB8_8320),
-        .CMD_PERIOD(5),  .STREAM_PERIOD(1), .SUB_KIND(SUB_CNN)
+        .CMD_PERIOD(5),  .STREAM_PERIOD(1), .SUB_KIND(SUB_CNN),
+        .INST_TAG("cnn")
     ) u_self_cnn (
         .clk(clk), .rst_n(rst_n),
         .cmd_if(cnn_cmd.master),
@@ -63,7 +64,8 @@ module lsd_top (
 
     lsd_self_traffic #(
         .SEED(32'hCAFE_BABE), .POLY(32'h04C1_1DB7),
-        .CMD_PERIOD(7),  .STREAM_PERIOD(2), .SUB_KIND(SUB_CRYPTO)
+        .CMD_PERIOD(7),  .STREAM_PERIOD(2), .SUB_KIND(SUB_CRYPTO),
+        .INST_TAG("crypto")
     ) u_self_crypto (
         .clk(clk), .rst_n(rst_n),
         .cmd_if(crypto_cmd.master),
@@ -73,7 +75,8 @@ module lsd_top (
 
     lsd_self_traffic #(
         .SEED(32'h1357_9BDF), .POLY(32'h82F6_3B78),
-        .CMD_PERIOD(9),  .STREAM_PERIOD(1), .SUB_KIND(SUB_GFX)
+        .CMD_PERIOD(9),  .STREAM_PERIOD(1), .SUB_KIND(SUB_GFX),
+        .INST_TAG("gfx")
     ) u_self_gfx (
         .clk(clk), .rst_n(rst_n),
         .cmd_if(gfx_cmd.master),
@@ -83,7 +86,8 @@ module lsd_top (
 
     lsd_self_traffic #(
         .SEED(32'h2468_ACE0), .POLY(32'hEB31_D82E),
-        .CMD_PERIOD(11), .STREAM_PERIOD(3), .SUB_KIND(SUB_CALU)
+        .CMD_PERIOD(11), .STREAM_PERIOD(3), .SUB_KIND(SUB_CALU),
+        .INST_TAG("calu")
     ) u_self_calu (
         .clk(clk), .rst_n(rst_n),
         .cmd_if(calu_cmd.master),
@@ -93,7 +97,8 @@ module lsd_top (
 
     lsd_self_traffic #(
         .SEED(32'hDEAD_BEEF), .POLY(32'hD419_CC15),
-        .CMD_PERIOD(13), .STREAM_PERIOD(2), .SUB_KIND(SUB_ECCD)
+        .CMD_PERIOD(13), .STREAM_PERIOD(2), .SUB_KIND(SUB_ECCD),
+        .INST_TAG("eccd")
     ) u_self_eccd (
         .clk(clk), .rst_n(rst_n),
         .cmd_if(eccd_cmd.master),
