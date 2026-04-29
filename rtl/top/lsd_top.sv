@@ -1,22 +1,27 @@
 //==============================================================================
 // lsd_top.sv
-// Top-level integration of all five functional subsystems plus the eight
-// uniqueness-padding bloat farms.
+// Top-level integration of all functional subsystems plus eight heavy-
+// compute islands.
 //
-// PARTITION-FRIENDLY (Phase 2) DESIGN
+// PARTITION-FRIENDLY (Phase 3) DESIGN
 // -----------------------------------
-// Every functional/bloat block is wrapped in its own *island* module
-// (lsd_subsys_islands.sv, lsd_bloat_islands.sv).  Each island exposes
-// only (clk, rst_n) externally — the per-subsystem cmd / stream
-// interfaces and the per-bloat seed generator live entirely inside
-// their island.  The ParallelSim partitioner therefore cannot split an
-// island across partitions, so cross-partition signals collapse from
-// "thousands of interface bits per cycle" (Phase 1.5 had self_traffic
-// in master and the subsystem in a worker, see test_logs/test_1222
-// qsimparallelsim.log:97-145) to just clk + rst_n broadcasts.
+// Phases 1-2 wrapped each subsystem and bloat farm in atomic islands so
+// the ParallelSim partitioner could not slice them, but the bloat farms
+// themselves were so light that qopt -O5 optimised them down to ~0%
+// profiler weight (test_logs/test1344 partition_analysis.txt) — that left
+// u_crypto carrying ~61% of profiler weight in any partition geometry,
+// hard-capping psim speedup at the Amdahl limit ~1.6x.
 //
-// The DUT has no testbench-driven ports.  tb_top instantiates lsd_top
-// with just (clk, rst_n) and observes via heartbeats.
+// Phase 3 throws out the file-multiplying bloat structure entirely and
+// replaces it with eight heavy-compute islands (lsd_compute0_island ..
+// lsd_compute7_island).  Each compute island runs a memory bank + wide
+// multiplication engine that does real per-cycle work qopt cannot
+// strength-reduce.  Total work is now substantial and roughly evenly
+// distributed across all eight islands, so the partitioner sees a
+// balanced workload with crypto's relative weight diluted.
+//
+// Every island's external port list is just (clk, rst_n).  tb_top
+// instantiates lsd_top with only (clk, rst_n) and observes via heartbeats.
 //==============================================================================
 module lsd_top (
     input  logic           clk,
@@ -33,16 +38,16 @@ module lsd_top (
     lsd_eccd_island   u_eccd   (.clk(clk), .rst_n(rst_n));
 
     // -------------------------------------------------------------------------
-    // Eight uniqueness-padding bloat-farm islands.  Each contains its own
-    // 32-bit free-running LFSR seed so the linear-chain family stays
-    // toggling.  See gen/<family>/ for the underlying generated farms.
+    // Eight heavy-compute islands.  Each is a 2048×256b memory bank +
+    // 8-port wide-MAC engine running every cycle, with a unique SEED so
+    // qopt cannot dedup them.
     // -------------------------------------------------------------------------
-    lsd_bloat_island   u_bloat   (.clk(clk), .rst_n(rst_n));
-    lsd_bloat2_island  u_bloat2  (.clk(clk), .rst_n(rst_n));
-    lsd_churn_island   u_churn   (.clk(clk), .rst_n(rst_n));
-    lsd_grind_island   u_grind   (.clk(clk), .rst_n(rst_n));
-    lsd_haze_island    u_haze    (.clk(clk), .rst_n(rst_n));
-    lsd_prism_island   u_prism   (.clk(clk), .rst_n(rst_n));
-    lsd_echo_island    u_echo    (.clk(clk), .rst_n(rst_n));
-    lsd_vortex_island  u_vortex  (.clk(clk), .rst_n(rst_n));
+    lsd_compute0_island u_c0 (.clk(clk), .rst_n(rst_n));
+    lsd_compute1_island u_c1 (.clk(clk), .rst_n(rst_n));
+    lsd_compute2_island u_c2 (.clk(clk), .rst_n(rst_n));
+    lsd_compute3_island u_c3 (.clk(clk), .rst_n(rst_n));
+    lsd_compute4_island u_c4 (.clk(clk), .rst_n(rst_n));
+    lsd_compute5_island u_c5 (.clk(clk), .rst_n(rst_n));
+    lsd_compute6_island u_c6 (.clk(clk), .rst_n(rst_n));
+    lsd_compute7_island u_c7 (.clk(clk), .rst_n(rst_n));
 endmodule : lsd_top

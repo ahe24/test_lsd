@@ -10,6 +10,7 @@
 ../rtl/common/lsd_rr_arbiter.sv
 ../rtl/common/lsd_prbs_driver.sv
 ../rtl/common/lsd_self_traffic.sv
+../rtl/common/lsd_heavy_compute.sv
 
 // -- CNN
 ../rtl/cnn/mac/cnn_mac_int8_radix2.sv
@@ -111,30 +112,17 @@
 ../rtl/eccd/turbo/turbo_decoder_top.sv
 ../rtl/eccd/top/eccd_top.sv
 
-// -- Generated bloat farms (thousands of unique modules, eight families)
-//    Each family lives in its own subdir under ../rtl/gen/ with a single
-//    filelist.f listing every generated file belonging to that family.
-//    family 1: linear arithmetic chain    (rtl/gen/bloat/  -> lsd_bloat_farm)
-//    family 2: parallel mem/ring kernels  (rtl/gen/bloat2/ -> lsd_bloat2_farm)
-//    family 3: broadcast-fanout kernels   (rtl/gen/churn/  -> lsd_churn_farm)
-//    family 4: crosscouple ring           (rtl/gen/grind/  -> lsd_grind_farm)
-//    family 5: pairwise fan-in            (rtl/gen/haze/   -> lsd_haze_farm)
-//    family 6: 64-bit MAC chain           (rtl/gen/prism/  -> lsd_prism_farm)
-//    family 7: deep delay lines           (rtl/gen/echo/   -> lsd_echo_farm)
-//    family 8: tick + counter banks       (rtl/gen/vortex/ -> lsd_vortex_farm)
--f ../rtl/gen/bloat/filelist.f
--f ../rtl/gen/bloat2/filelist.f
--f ../rtl/gen/churn/filelist.f
--f ../rtl/gen/grind/filelist.f
--f ../rtl/gen/haze/filelist.f
--f ../rtl/gen/prism/filelist.f
--f ../rtl/gen/echo/filelist.f
--f ../rtl/gen/vortex/filelist.f
-
 // -- Top-level integration
+//    Phase 3 layout: five functional subsystem islands + eight heavy-
+//    compute islands.  The previous bloat farms (rtl/gen/<family>/) and
+//    their wrapper lsd_bloat_islands.sv have been retired — they were
+//    excellent for compile-time stress (thousands of unique modules) but
+//    qopt -O5 optimised them down to ~0% per-cycle simulator work.  See
+//    rtl/common/lsd_heavy_compute.sv + rtl/top/lsd_compute_islands.sv
+//    for the replacement.
 ../rtl/top/lsd_interconnect.sv
 ../rtl/top/lsd_stream_fanout.sv
 ../rtl/top/lsd_stream_merge.sv
 ../rtl/top/lsd_subsys_islands.sv
-../rtl/top/lsd_bloat_islands.sv
+../rtl/top/lsd_compute_islands.sv
 ../rtl/top/lsd_top.sv

@@ -1,11 +1,15 @@
 # =============================================================================
 #  LSD Simulation Makefile  (Questasim / Questa One Sim)  -  UVM-FREE
 # -----------------------------------------------------------------------------
-#  Phase 1.5: the testbench is plain SystemVerilog (no UVM), and per-subsystem
-#  stimulus comes from RTL-internal PRBS islands (lsd_self_traffic.sv).  Each
-#  named test target below selects a different traffic profile by passing
-#  plusargs that the islands read once at time 0, so the whole flow is
-#  ParallelSim Field-of-Use friendly (no virtual interfaces, no UVM VPI hub).
+#  Phase 3 design (no UVM, no auto-generated bloat farms):
+#  - tb_top is plain SystemVerilog and exposes the DUT only as (clk, rst_n).
+#  - lsd_top instantiates 5 functional islands (cnn / crypto / gfx / calu /
+#    eccd) and 8 heavy-compute islands.  Each island is atomic — the
+#    partitioner can place it but cannot split it — and external signals
+#    are limited to clk/rst_n, keeping ParallelSim Field-of-Use clean.
+#  - Per-cycle work comes from lsd_heavy_compute (memory + 256-bit MAC),
+#    which qopt cannot strength-reduce.  The previous bloat-farm gen tools
+#    (8 Python scripts × thousands of unique modules) have been retired.
 #
 #  Workload targets (functional)
 #    smokesim          quick sanity (5 us, light traffic)
@@ -15,7 +19,7 @@
 #    crypto_heavy      crypto dominates (Amdahl bound test)      (50 us)
 #    cnn_heavy         cnn dominates                             (50 us)
 #    eccd_only         all other subsystems disabled             (10 us)
-#    stress            everything maxed, long run (200 us)       — psim baseline
+#    stress            everything maxed, long run (1 ms)         — psim baseline
 #
 #  ParallelSim flow (qsim only)
 #    qual              run profiler+flps qualifier (defaults to stress)
@@ -25,11 +29,10 @@
 #    Override workload: make qual WORKLOAD=balanced (or any target name above)
 #
 #  Misc
-#    gen / clean-gen   bloat-farm (re)generation
 #    clean             remove build artifacts
 #    info              print current knob values
 #
-#  Knobs (override at CLI, e.g.  make stress ENGINE=qsim BLOAT_COUNT=2000)
+#  Knobs (override at CLI, e.g.  make stress ENGINE=qsim FLPS=3)
 #    ENGINE       vsim | qsim | qrun           default: vsim
 #    DEBUG        wlf | vis | off              default: vis
 #                   wlf : vsim-only +acc=npr + .wlf
@@ -39,13 +42,6 @@
 #                         of wall time on stress and capped psim speedup)
 #    RUN          "-all" | "1 us" | …          default: -all (sim ends on $finish)
 #    SEED         <int>                        default: 1
-#    BLOAT_COUNT  per-family generator count   default: 1000  (total = 8 × this)
-#    BLOAT_WORK   heavy MAC stages per bloat unit  default: 0   (0 = baseline,
-#                 N>0 appends N pipelined 64-bit MAC stages to every generated
-#                 unit, multiplying simulator work per cycle without raising
-#                 module count.  Try 2-4 to lengthen runs without bumping
-#                 BLOAT_COUNT.  Stamp filename includes the value so changing
-#                 it auto-triggers regen of all bloat farms.)
 #    HEARTBEAT    ns between progress prints   default: 10000
 #    WORKLOAD     test profile name (see above) default: stress (used by qual/etc.)
 #    WORKLOAD_ARGS direct plusarg list          default: derived from WORKLOAD
@@ -63,8 +59,6 @@ ENGINE      ?= vsim
 RUN         ?= -all
 DEBUG       ?= vis
 SEED        ?= 1
-BLOAT_COUNT ?= 1000
-BLOAT_WORK  ?= 0
 HEARTBEAT   ?= 10000
 
 # Workload selector for qual / qfbk / psim / uni.  WORKLOAD_ARGS, if set
@@ -99,23 +93,23 @@ else
 endif
 
 # -----------------------------------------------------------------------------
-# Bloat farms: eight structurally distinct families in rtl/gen/<family>/ run
-# side-by-side so the simulator's optimizer cannot collapse the workload by
-# matching any single topology. See tools/gen_*.py for per-family details.
+# Phase 3 RTL layout
 #
-#   Families:  bloat  bloat2  churn  grind  haze  prism  echo  vortex
+#   Five functional subsystem islands  (rtl/top/lsd_subsys_islands.sv)
+#     - lsd_cnn_island, lsd_crypto_island, lsd_gfx_island,
+#       lsd_calu_island, lsd_eccd_island
+#     - Each owns an internal lsd_self_traffic + the matching DUT block.
 #
-#   Per-family scale guide (~16-core, 32 GB; total load = 8 x BLOAT_COUNT):
-#     Value     Compile    vopt       Typical use
-#     --------  ---------  ---------  -----------------------
-#        500    ~5  s      ~15 s      debug / fast iteration
-#       2000    ~30 s      ~60 s      default stress
-#      10000    ~5-10 min  ~5 min     real stress
-#      30000    ~30 min    ~20 min    extreme stress
-#     100000    hours      hours      simulator-killer
+#   Eight heavy-compute islands         (rtl/top/lsd_compute_islands.sv)
+#     - lsd_compute0_island .. lsd_compute7_island, each instantiating
+#       lsd_heavy_compute (rtl/common/lsd_heavy_compute.sv) with a unique
+#       SEED.  These replace the previous file-multiplying bloat farms,
+#       which qopt -O5 reduced to ~0% per-cycle work.  The new compute
+#       engine does real memory + 256-bit multiplication every cycle and
+#       qopt cannot strength-reduce it.
 #
-#   Beyond 9999 per family, bump the 4-digit padding in tools/gen_*.py.
-#   Past ~50000 per family, vopt RAM can blow up — consider a 2-level farm.
+#   13 islands total + tb_top live inside the partitioner.  Every island
+#   exposes only (clk, rst_n) so the partitioner sees them as atomic.
 # -----------------------------------------------------------------------------
 
 # --- File lists and libraries
@@ -295,37 +289,18 @@ QRUN_FLAGS  = -sv -mfcu -timescale=1ns/1ps \
 
 # =============================================================================
 .PHONY: all sim smokesim balanced streaming command_storm crypto_heavy cnn_heavy \
-        eccd_only stress qual qfbk psim uni qual_gui gen clean-gen clean \
+        eccd_only stress qual qfbk psim uni qual_gui clean \
         workdir compile optimize run run_vsim run_qsim run_qrun info
 
 all: smokesim
 
-# -----------------------------------------------------------------------------
-# gen — regenerate bloat farms, cached by per-family stamp file.
-# -----------------------------------------------------------------------------
-BLOAT_FAMILIES := bloat bloat2 churn grind haze prism echo vortex
-# Stamp filename encodes BOTH count and work so that changing either knob
-# triggers a full regen.  Wiping all .stamp-* on a successful build keeps
-# the directory clean of stale stamps from other (count, work) pairs.
-BLOAT_STAMPS   := $(foreach f,$(BLOAT_FAMILIES),../rtl/gen/$(f)/.stamp-$(BLOAT_COUNT)-w$(BLOAT_WORK))
-
-gen: $(BLOAT_STAMPS)
-
-../rtl/gen/%/.stamp-$(BLOAT_COUNT)-w$(BLOAT_WORK): tools/gen_%.py tools/_heavy_tail.py
-	@echo "[gen] $* (count=$(BLOAT_COUNT), work=$(BLOAT_WORK))"
-	python $< --out $(@D) --count $(BLOAT_COUNT) --work $(BLOAT_WORK)
-	-@rm -f $(@D)/.stamp-* 2>/dev/null
-	@touch $@
-
-clean-gen:
-	-@rm -f ../rtl/gen/*/.stamp-* 2>/dev/null
-	@echo "[clean-gen] all family stamps removed"
-
 workdir:
 	@if [ ! -d $(WORKLIB) ]; then vlib $(WORKLIB); vmap $(WORKLIB) $(WORKLIB); fi
 
-# --- Compile (vlog) — shared by the vsim and qsim engines
-compile: workdir gen
+# --- Compile (vlog) — shared by the vsim and qsim engines.
+#     Phase 3 dropped the auto-generated bloat farms.  All RTL is now
+#     hand-written / stable, so there is no `gen` step.
+compile: workdir
 	vlog $(VLOG_FLAGS)    -f $(RTL_FL) -l vlog.log
 	vlog $(VLOG_TB_FLAGS) -f $(TB_FL)  -l vlog_tb.log
 
@@ -355,7 +330,7 @@ run_vsim: optimize
 run_qsim: optimize
 	qsim $(QSIM_FLAGS) tb_top_opt
 
-run_qrun: gen
+run_qrun:
 	qrun $(QRUN_FLAGS)
 
 # -----------------------------------------------------------------------------
@@ -452,8 +427,6 @@ info:
 	@echo 'DEBUG         = $(DEBUG)'
 	@echo 'MEASURE_DEBUG = $(MEASURE_DEBUG)   (used by qual/qfbk/psim/uni)'
 	@echo 'SEED          = $(SEED)'
-	@echo 'BLOAT_COUNT   = $(BLOAT_COUNT)'
-	@echo 'BLOAT_WORK    = $(BLOAT_WORK)   (heavy MAC stages per unit)'
 	@echo 'HEARTBEAT     = $(HEARTBEAT) ns'
 	@echo 'RUN           = $(RUN)'
 	@echo 'WORKLOAD      = $(WORKLOAD)'
