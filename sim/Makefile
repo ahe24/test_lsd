@@ -40,6 +40,12 @@
 #    RUN          "-all" | "1 us" | …          default: -all (sim ends on $finish)
 #    SEED         <int>                        default: 1
 #    BLOAT_COUNT  per-family generator count   default: 1000  (total = 8 × this)
+#    BLOAT_WORK   heavy MAC stages per bloat unit  default: 0   (0 = baseline,
+#                 N>0 appends N pipelined 64-bit MAC stages to every generated
+#                 unit, multiplying simulator work per cycle without raising
+#                 module count.  Try 2-4 to lengthen runs without bumping
+#                 BLOAT_COUNT.  Stamp filename includes the value so changing
+#                 it auto-triggers regen of all bloat farms.)
 #    HEARTBEAT    ns between progress prints   default: 10000
 #    WORKLOAD     test profile name (see above) default: stress (used by qual/etc.)
 #    WORKLOAD_ARGS direct plusarg list          default: derived from WORKLOAD
@@ -58,6 +64,7 @@ RUN         ?= -all
 DEBUG       ?= vis
 SEED        ?= 1
 BLOAT_COUNT ?= 1000
+BLOAT_WORK  ?= 0
 HEARTBEAT   ?= 10000
 
 # Workload selector for qual / qfbk / psim / uni.  WORKLOAD_ARGS, if set
@@ -297,13 +304,16 @@ all: smokesim
 # gen — regenerate bloat farms, cached by per-family stamp file.
 # -----------------------------------------------------------------------------
 BLOAT_FAMILIES := bloat bloat2 churn grind haze prism echo vortex
-BLOAT_STAMPS   := $(foreach f,$(BLOAT_FAMILIES),../rtl/gen/$(f)/.stamp-$(BLOAT_COUNT))
+# Stamp filename encodes BOTH count and work so that changing either knob
+# triggers a full regen.  Wiping all .stamp-* on a successful build keeps
+# the directory clean of stale stamps from other (count, work) pairs.
+BLOAT_STAMPS   := $(foreach f,$(BLOAT_FAMILIES),../rtl/gen/$(f)/.stamp-$(BLOAT_COUNT)-w$(BLOAT_WORK))
 
 gen: $(BLOAT_STAMPS)
 
-../rtl/gen/%/.stamp-$(BLOAT_COUNT): tools/gen_%.py
-	@echo "[gen] $* (count=$(BLOAT_COUNT))"
-	python $< --out $(@D) --count $(BLOAT_COUNT)
+../rtl/gen/%/.stamp-$(BLOAT_COUNT)-w$(BLOAT_WORK): tools/gen_%.py tools/_heavy_tail.py
+	@echo "[gen] $* (count=$(BLOAT_COUNT), work=$(BLOAT_WORK))"
+	python $< --out $(@D) --count $(BLOAT_COUNT) --work $(BLOAT_WORK)
 	-@rm -f $(@D)/.stamp-* 2>/dev/null
 	@touch $@
 
@@ -442,6 +452,7 @@ info:
 	@echo 'MEASURE_DEBUG = $(MEASURE_DEBUG)   (used by qual/qfbk/psim/uni)'
 	@echo 'SEED          = $(SEED)'
 	@echo 'BLOAT_COUNT   = $(BLOAT_COUNT)'
+	@echo 'BLOAT_WORK    = $(BLOAT_WORK)   (heavy MAC stages per unit)'
 	@echo 'HEARTBEAT     = $(HEARTBEAT) ns'
 	@echo 'RUN           = $(RUN)'
 	@echo 'WORKLOAD      = $(WORKLOAD)'

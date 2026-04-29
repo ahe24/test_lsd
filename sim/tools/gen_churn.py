@@ -30,6 +30,8 @@ import argparse
 import os
 import random
 
+from _heavy_tail import inject_heavy_tail
+
 
 MIX_TEMPLATE = """\
 //==============================================================================
@@ -220,6 +222,8 @@ def main():
     p.add_argument('--count', type=int, default=2000)
     # Distinct seed from gen_bloat.py / gen_bloat2.py so constants don't correlate.
     p.add_argument('--seed', type=int, default=0x1337D00D)
+    p.add_argument('--work', type=int, default=0,
+                   help='heavy MAC stages per unit (0 = baseline)')
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -228,6 +232,7 @@ def main():
     filelist = []
     for i in range(args.count):
         body = gen_module(i, rng)
+        body = inject_heavy_tail(body, args.work, rng)
         path = os.path.join(args.out, f"lsd_churn_u{i:04d}.sv")
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(body)

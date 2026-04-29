@@ -19,6 +19,8 @@ import os
 import random
 import textwrap
 
+from _heavy_tail import inject_heavy_tail
+
 MAC_TEMPLATE = """\
 //==============================================================================
 // AUTO-GENERATED — DO NOT EDIT BY HAND
@@ -205,6 +207,8 @@ def main():
     p.add_argument('--out', required=True, help='output directory')
     p.add_argument('--count', type=int, default=2000)
     p.add_argument('--seed', type=int, default=0xC0DEBA5E)
+    p.add_argument('--work', type=int, default=0,
+                   help='heavy MAC stages per unit (0 = baseline)')
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -220,6 +224,7 @@ def main():
         inner = gen_module(i, rng)
         shell_idx = i
         wrapped = _make_shell(shell_idx, inner, rng)
+        wrapped = inject_heavy_tail(wrapped, args.work, rng)
         path = os.path.join(args.out, f"lsd_bloat_u{i:04d}.sv")
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(wrapped)

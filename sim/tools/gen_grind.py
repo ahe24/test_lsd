@@ -19,6 +19,8 @@ import argparse
 import os
 import random
 
+from _heavy_tail import inject_heavy_tail
+
 
 GRIND_TEMPLATE = """\
 //==============================================================================
@@ -111,6 +113,8 @@ def main():
     p.add_argument('--out', required=True)
     p.add_argument('--count', type=int, default=2000)
     p.add_argument('--seed', type=int, default=0x47524E44)  # 'GRND'
+    p.add_argument('--work', type=int, default=0,
+                   help='heavy MAC stages per unit (0 = baseline)')
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -119,8 +123,10 @@ def main():
     filelist = []
     for i in range(args.count):
         path = os.path.join(args.out, f"lsd_grind_u{i:04d}.sv")
+        unit_sv = gen_unit(i, rng)
+        unit_sv = inject_heavy_tail(unit_sv, args.work, rng)
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(gen_unit(i, rng))
+            f.write(unit_sv)
         filelist.append(os.path.relpath(path, args.out))
 
     farm_path = os.path.join(args.out, "lsd_grind_farm.sv")

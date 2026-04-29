@@ -17,6 +17,8 @@ import argparse
 import os
 import random
 
+from _heavy_tail import inject_heavy_tail
+
 
 ECHO_TEMPLATE = """\
 //==============================================================================
@@ -117,6 +119,8 @@ def main():
     p.add_argument('--out', required=True)
     p.add_argument('--count', type=int, default=2000)
     p.add_argument('--seed', type=int, default=0x4543484F)  # 'ECHO'
+    p.add_argument('--work', type=int, default=0,
+                   help='heavy MAC stages per unit (0 = baseline)')
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -124,9 +128,10 @@ def main():
 
     filelist = []
     for i in range(args.count):
+        unit_sv = inject_heavy_tail(gen_unit(i, rng), args.work, rng)
         path = os.path.join(args.out, f"lsd_echo_u{i:04d}.sv")
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(gen_unit(i, rng))
+            f.write(unit_sv)
         filelist.append(os.path.relpath(path, args.out))
 
     farm_path = os.path.join(args.out, "lsd_echo_farm.sv")
